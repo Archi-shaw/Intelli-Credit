@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 import re
 from functools import lru_cache
 
@@ -31,7 +32,7 @@ class EmbeddingProvider:
     model = "base"
     is_semantic = False
 
-    def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover - interface
+    def embed(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:  # pragma: no cover - interface
         raise NotImplementedError
 
     @property
@@ -43,7 +44,7 @@ def tokenize(text: str) -> list[str]:
     return [t for t in _TOKEN.findall(text.lower()) if t not in STOP]
 
 
-class HashingEmbedder(EmbeddingProvider):
+class HashingEmbedder(EmbeddingProvider):  # noqa: D101
     name = "local-hash"
 
     def __init__(self, dim: int = 384):
@@ -72,7 +73,7 @@ class HashingEmbedder(EmbeddingProvider):
             add("b:" + a + "_" + b, 0.7)
         return feats
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:
         out = []
         for text in texts:
             vec = [0.0] * self.dim
@@ -84,29 +85,69 @@ class HashingEmbedder(EmbeddingProvider):
 
 
 class VoyageEmbedder(EmbeddingProvider):
+    """Voyage AI embeddings: batched, retried with backoff, dimension-checked.
+
+    Vectors are stored with ``model_id`` and retrieval only compares vectors from the same model, so switching
+    model or dimension never mixes incompatible vectors (re-index with ``python -m app.cli reembed``).
+    """
+
     name = "voyage"
     is_semantic = True
+    batch_size = 128
+    max_attempts = 3
+    url = "https://api.voyageai.com/v1/embeddings"
 
-    def __init__(self, api_key: str, model: str = "voyage-3.5"):
+    def __init__(self, api_key: str, model: str = "voyage-3.5", client: httpx.Client | None = None):
         if not api_key:
             raise EmbeddingError("EMBEDDING_API_KEY is required for the Voyage embedding provider.")
         self.api_key = api_key
         self.model = model
+        self.client = client or httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0))
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        try:
-            resp = httpx.post(
-                "https://api.voyageai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"input": texts, "model": self.model},
-                timeout=60.0,
-            )
-        except httpx.HTTPError as exc:
-            raise EmbeddingError(f"Voyage request failed: {exc}") from exc
-        if resp.status_code != 200:
-            raise EmbeddingError(f"Voyage API error {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()["data"]
-        return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
+    def _post(self, batch: list[str], input_type: str | None) -> list[list[float]]:
+        body = {"input": batch, "model": self.model}
+        if input_type in ("document", "query"):
+            body["input_type"] = input_type
+        delay = 1.0
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                resp = self.client.post(self.url, headers={"Authorization": f"Bearer {self.api_key}"}, json=body)
+            except httpx.TimeoutException:
+                err = EmbeddingError("Voyage request timed out.")
+            except httpx.HTTPError as exc:
+                err = EmbeddingError(f"Voyage request failed: {type(exc).__name__}.")
+            else:
+                if resp.status_code == 200:
+                    try:
+                        data = sorted(resp.json()["data"], key=lambda d: d["index"])
+                        vecs = [[float(x) for x in d["embedding"]] for d in data]
+                    except (ValueError, KeyError, TypeError) as exc:
+                        raise EmbeddingError("Voyage returned an unexpected response.") from exc
+                    if len(vecs) != len(batch):
+                        raise EmbeddingError(f"Voyage returned {len(vecs)} vectors for {len(batch)} inputs.")
+                    return vecs
+                if resp.status_code in (401, 403):
+                    raise EmbeddingError(f"Voyage rejected the API key (HTTP {resp.status_code}).")
+                if resp.status_code != 429 and resp.status_code < 500:
+                    raise EmbeddingError(f"Voyage API error {resp.status_code}.")
+                err = EmbeddingError(f"Voyage API error {resp.status_code}" + (" (rate limited)" if resp.status_code == 429 else ""))
+                try:
+                    delay = max(delay, float(resp.headers.get("retry-after", 0)))
+                except ValueError:
+                    pass
+            if attempt < self.max_attempts:
+                time.sleep(min(delay, 20.0))
+                delay *= 2
+        raise err
+
+    def embed(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), self.batch_size):
+            vectors.extend(self._post(texts[i:i + self.batch_size], input_type))
+        dims = {len(v) for v in vectors}
+        if len(dims) > 1:
+            raise EmbeddingError(f"Voyage returned vectors of different dimensions: {sorted(dims)}.")
+        return vectors
 
 
 class SentenceTransformerEmbedder(EmbeddingProvider):
@@ -121,7 +162,7 @@ class SentenceTransformerEmbedder(EmbeddingProvider):
         self.model = model
         self._m = SentenceTransformer(model)
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:
         return [list(map(float, v)) for v in self._m.encode(texts, normalize_embeddings=True)]
 
 

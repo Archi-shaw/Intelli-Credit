@@ -6,6 +6,7 @@ Missing metrics stay missing — nothing is defaulted to zero.
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date
 
@@ -14,7 +15,10 @@ from sqlalchemy.orm import Session
 
 from ai_engine.extraction.financial_extractor import metric_display_name
 from ai_engine.risk_model.ratios import RatioResult, compute_ratios, derive_metrics
+from app.core.database import lock_application
 from app.models import ExtractedFinancialMetric, FinancialRatio, FinancialStatement, UploadedDocument
+
+log = logging.getLogger("intellicredit.financials")
 
 # Statement metrics only come from statement-type documents (bank/GST figures are reconciled separately).
 STATEMENT_CATEGORIES = {"financial_statements", "annual_reports", "income_tax_returns", "other"}
@@ -30,6 +34,9 @@ def _metric_rows(db: Session, application_id: int) -> list[tuple[ExtractedFinanc
 
 
 def consolidate_statements(db: Session, application_id: int) -> list[FinancialStatement]:
+    # Serialised per application: concurrent consolidations (several documents finishing at once) would otherwise
+    # each delete only committed rows and both insert, duplicating every period.
+    lock_application(db, application_id)
     db.flush()
     groups: dict[str, dict[str, list[ExtractedFinancialMetric]]] = defaultdict(lambda: defaultdict(list))
     period_ends: dict[str, date | None] = {}
@@ -66,8 +73,18 @@ def consolidate_statements(db: Session, application_id: int) -> list[FinancialSt
 
 
 def statements_by_period(db: Session, application_id: int) -> list[FinancialStatement]:
-    rows = db.scalars(select(FinancialStatement).where(FinancialStatement.application_id == application_id)).all()
-    return sorted(rows, key=lambda s: s.period_end or date.min)
+    """One statement per period, oldest first.
+
+    Duplicated periods can only exist in databases written before consolidation was serialised; the copies are
+    identical, so the newest row is used and the duplicate is never mistaken for the prior year.
+    """
+    rows = db.scalars(select(FinancialStatement).where(FinancialStatement.application_id == application_id)
+                      .order_by(FinancialStatement.id)).all()
+    by_period = {s.period_label: s for s in rows}
+    if len(by_period) != len(rows):
+        log.warning("duplicate consolidated statements ignored",
+                    extra={"ctx": {"application_id": application_id, "rows": len(rows), "periods": len(by_period)}})
+    return sorted(by_period.values(), key=lambda s: s.period_end or date.min)
 
 
 def period_metrics(stmt: FinancialStatement | None) -> dict[str, dict]:
@@ -87,6 +104,8 @@ def latest_and_prior(db: Session, application_id: int):
 
 def compute_application_ratios(db: Session, application_id: int, thresholds: dict, *,
                                assessment_id: int | None = None, persist: bool = True) -> tuple[dict, dict | None, list[RatioResult], str | None]:
+    if persist:
+        lock_application(db, application_id)  # delete + re-insert of the persisted ratio set
     latest, prior, _ = latest_and_prior(db, application_id)
     cur = derive_metrics(period_metrics(latest))
     pri = derive_metrics(period_metrics(prior)) if prior else None

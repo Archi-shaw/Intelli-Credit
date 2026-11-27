@@ -1,0 +1,12 @@
+# Builds the web image with the (internal) API URL baked into the Next.js rewrite table.
+#   gcloud builds submit frontend --config deploy/gcp/cloudbuild-frontend.yaml \
+#     --substitutions=_IMAGE=REGION-docker.pkg.dev/PROJECT/intellicredit/frontend:TAG,_BACKEND_URL=https://ic-api-xxxx.REGION.run.app
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BACKEND_URL=${_BACKEND_URL}", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]
+substitutions:
+  _IMAGE: ""
+  _BACKEND_URL: ""
+options:
+  logging: CLOUD_LOGGING_ONLY

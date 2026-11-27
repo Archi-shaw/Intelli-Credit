@@ -6,7 +6,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 log = logging.getLogger("intellicredit.errors")
@@ -85,11 +85,22 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(IntegrityError)
     async def _integrity_error(_: Request, exc: IntegrityError):
-        log.warning("Integrity error: %s", exc.orig)
+        # The driver message can quote row values (e.g. "Key (email)=(...) already exists"): log the constraint only.
+        log.warning("Integrity error (%s, constraint %s)", type(exc.orig).__name__,
+                    getattr(getattr(exc.orig, "diag", None), "constraint_name", None))
         return JSONResponse(
             status_code=409,
             content=_body("conflict", "The record conflicts with existing data (duplicate or invalid reference)."),
         )
+
+    @app.exception_handler(DataError)
+    async def _data_error(_: Request, exc: DataError):
+        # A value the database cannot store (NUL character in a query parameter, out-of-range number, ...).
+        # Request validation rejects these first; this is the backstop. The value itself is never logged or echoed.
+        log.warning("Value rejected by the database (%s, SQLSTATE %s)", type(exc.orig).__name__,
+                    getattr(exc.orig, "sqlstate", None))
+        return JSONResponse(status_code=422, content=_body(
+            "invalid_value", "A submitted value cannot be stored (out of range or contains invalid characters)."))
 
     @app.exception_handler(OperationalError)
     async def _db_down(_: Request, exc: OperationalError):

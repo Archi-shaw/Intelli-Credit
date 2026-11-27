@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 from ai_engine.llm.provider import LLMError, LLMProvider, LLMUnavailable
-from ai_engine.research.providers import SearchError, SearchNotConfigured, SearchProvider, SearchResult, source_tier
+from ai_engine.research.providers import NOT_CONFIGURED, SearchError, SearchNotConfigured, SearchProvider, SearchResult, source_tier
 
 NO_RESULTS = "No verified information found for this search."
 
@@ -176,7 +176,7 @@ def run_research(company: dict, promoters: list[str], directors: list[str], prov
         try:
             results = provider.search(q.text, max_results=max_results)
         except SearchNotConfigured as exc:
-            outcomes.append(QueryOutcome(q, "not_configured", f"{NO_RESULTS} ({exc})", []))
+            outcomes.append(QueryOutcome(q, "not_configured", str(exc) or NOT_CONFIGURED, []))
             continue
         except SearchError as exc:
             outcomes.append(QueryOutcome(q, "failed", str(exc), []))

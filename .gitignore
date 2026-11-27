@@ -9,3 +9,12 @@ __pycache__/
 frontend/node_modules/
 frontend/.next/
 *.log
+
+# build outputs
+frontend/.next-e2e/
+frontend/test-results/
+frontend/playwright-report/
+frontend/tsconfig.tsbuildinfo
+
+# local backups (database dumps, storage, working-tree snapshots)
+backups/

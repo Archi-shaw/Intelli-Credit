@@ -35,11 +35,35 @@ class Settings(BaseSettings):
     COOKIE_NAME: str = "ic_session"
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: Literal["json", "text"] = "json"
-    RATE_LIMIT_PER_MINUTE: int = 240  # per client IP across the API
-    AUTH_RATE_LIMIT_PER_MINUTE: int = 20  # login / registration attempts per IP
+    # --- Rate limiting (see app/core/ratelimit.py) ---
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_BACKEND: Literal["redis", "memory"] = "redis"  # redis = shared across API instances
+    RATE_LIMIT_REDIS_URL: str = ""  # defaults to REDIS_URL
+    RATE_LIMIT_KEY_PREFIX: str = "ic:rl"
+    RATE_LIMIT_FAIL_MODE: Literal["local", "open", "closed"] = "local"  # behaviour while Redis is unreachable
+    RATE_LIMIT_BREAKER_SECONDS: int = 5
+    RATE_LIMIT_REDIS_TIMEOUT_MS: int = 300  # slower store replies count as an outage (fail mode applies)
+    # Limits as "N/period" (period: second, minute, hour, day; e.g. "20/10minute").
+    RATE_LIMIT_IP: str = ""  # unauthenticated requests per IP (default: RATE_LIMIT_PER_MINUTE/minute)
+    RATE_LIMIT_AUTH: str = ""  # login/registration per IP (default: AUTH_RATE_LIMIT_PER_MINUTE/minute)
+    RATE_LIMIT_USER: str = "600/minute"
+    RATE_LIMIT_ORG: str = "3000/minute"
+    RATE_LIMIT_AI_USER: str = "20/minute"
+    RATE_LIMIT_AI_ORG: str = "100/minute"
+    RATE_LIMIT_PROCESSING_USER: str = "60/minute"
+    RATE_LIMIT_PROCESSING_ORG: str = "300/minute"
+    RATE_LIMIT_PER_MINUTE: int = 300  # legacy default for RATE_LIMIT_IP
+    # Reverse proxies whose X-Forwarded-For header is trusted (the Next.js frontend proxies /api).
+    TRUSTED_PROXIES: str = "127.0.0.1/32,::1/128"
+    AUTH_RATE_LIMIT_PER_MINUTE: int = 20  # legacy default for RATE_LIMIT_AUTH
 
     # --- Database / cache ---
     DATABASE_URL: str = "postgresql+psycopg://intelli:intelli_dev_pw@localhost:5433/intellicredit"
+    # Owner/superuser connection used only for migrations and role management. Defaults to DATABASE_URL.
+    MIGRATION_DATABASE_URL: str = ""
+    # Non-superuser role the API/worker should connect as so PostgreSQL row-level security applies.
+    DB_APP_ROLE: str = "intellicredit_app"
+    APP_DB_PASSWORD: str = ""  # used only by `python -m app.cli create-app-role`
     REDIS_URL: str = "redis://localhost:6380/0"
 
     # --- Background jobs: "celery" (Redis worker), "thread" (in-process pool), "sync" (inline, tests) ---
@@ -68,6 +92,11 @@ class Settings(BaseSettings):
     SEARCH_PROVIDER: Literal["none", "tavily", "brave", "serpapi"] = "none"
     SEARCH_API_KEY: str = ""
     SEARCH_MAX_RESULTS: int = 6
+    # Per-provider keys (each can be connection-tested independently; SEARCH_API_KEY is used for the active
+    # SEARCH_PROVIDER when its specific key is blank).
+    TAVILY_API_KEY: str = ""
+    BRAVE_API_KEY: str = ""
+    SERPAPI_API_KEY: str = ""
 
     # --- OCR ---
     OCR_PROVIDER: Literal["auto", "tesseract", "rapidocr", "none"] = "auto"
@@ -78,11 +107,27 @@ class Settings(BaseSettings):
     DATABRICKS_TOKEN: str = ""
     DATABRICKS_WAREHOUSE_ID: str = ""
 
+    # --- ML challenger (experimental; never used for decisions while trained on synthetic labels) ---
+    CHALLENGER_ENABLED: bool = True
+    CHALLENGER_MODEL_DIR: str = str(BACKEND_DIR / "models" / "challenger")
+    CHALLENGER_MODEL_VERSION: str = ""  # blank = the version named in <CHALLENGER_MODEL_DIR>/LATEST
+
     # --- Demo ---
     DEMO_MODE: bool = True
     SYNTHETIC_DATA_DIR: str = str(REPO_DIR / "data" / "synthetic")
 
-    @field_validator("DATABASE_URL")
+    @field_validator("STORAGE_DIR", "SYNTHETIC_DATA_DIR", "CHALLENGER_MODEL_DIR", mode="before")
+    @classmethod
+    def _resolve_dir(cls, v, info):
+        """Blank means the default location; relative paths are anchored at the repository root."""
+        defaults = {"STORAGE_DIR": BACKEND_DIR / "storage", "SYNTHETIC_DATA_DIR": REPO_DIR / "data" / "synthetic",
+                    "CHALLENGER_MODEL_DIR": BACKEND_DIR / "models" / "challenger"}
+        if v is None or not str(v).strip():
+            return str(defaults[info.field_name])
+        p = Path(str(v).strip()).expanduser()
+        return str(p if p.is_absolute() else (REPO_DIR / p).resolve())
+
+    @field_validator("DATABASE_URL", "MIGRATION_DATABASE_URL")
     @classmethod
     def _normalise_db_url(cls, v: str) -> str:
         # Accept plain postgres URLs and route them through psycopg 3.
@@ -111,6 +156,10 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.MAX_UPLOAD_MB * 1024 * 1024
+
+    @property
+    def migration_url(self) -> str:
+        return self.MIGRATION_DATABASE_URL or self.DATABASE_URL
 
     @property
     def is_sqlite(self) -> bool:

@@ -77,7 +77,9 @@ class ExtractionResult:
     warnings: list[str]
 
 
-_TRAILING_NUMS = re.compile(r"((?:\s+(?:\(\s*)?[-–−]?\s*(?:₹\s*)?\d[\d,]*(?:\.\d+)?\s*\)?)+)\s*$")
+# Each repetition is unambiguous (whitespace only at its start) so the search is linear-time;
+# the earlier form with overlapping \s* / \s+ backtracked exponentially on number-dense lines.
+_TRAILING_NUMS = re.compile(r"((?:\s+(?:\(\s?)?(?:[-–−]\s?)?(?:₹\s?)?\d[\d,]*(?:\.\d+)?(?:\s?\))?)+)\s*$")
 _INLINE_UNIT_VALUE = re.compile(
     r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)\s*(crores?|cr\.?|lakhs?|lacs?|lac|millions?|mn)\b", re.I
 )

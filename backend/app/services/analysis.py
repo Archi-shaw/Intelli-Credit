@@ -14,6 +14,7 @@ from ai_engine.decision_engine.engine import DecisionInputs, decide
 from ai_engine.reconciliation.engine import ReconInputs, run_reconciliation
 from ai_engine.risk_model.policy import get_default_policy, merge_policy
 from ai_engine.risk_model.scorecard import AssessmentInputs, run_scorecard
+from app.core.database import lock_application
 from app.core.errors import PreconditionFailed
 from app.models import (
     BankTransaction,
@@ -32,7 +33,7 @@ from app.models import (
     UploadedDocument,
 )
 from app.services import audit
-from app.services.financials import compute_application_ratios, latest_and_prior, statements_by_period
+from app.services.financials import compute_application_ratios, latest_and_prior, period_metrics, statements_by_period
 
 
 # ---------------------------------------------------------------- policy
@@ -82,6 +83,7 @@ def build_recon_inputs(db: Session, app_: CreditApplication) -> ReconInputs:
 
 
 def run_reconciliation_for(db: Session, app_: CreditApplication, user_id: int | None) -> list[Reconciliation]:
+    lock_application(db, app_.id)  # concurrent runs would otherwise share a run number and merge their items
     if not db.scalar(select(func.count(UploadedDocument.id)).where(UploadedDocument.application_id == app_.id,
                                                                    UploadedDocument.processing_status == "completed")):
         raise PreconditionFailed("Upload and process at least one document before running reconciliation.")
@@ -168,6 +170,9 @@ def _shareholding(db: Session, app_: CreditApplication) -> dict:
 
 
 def run_assessment(db: Session, app_: CreditApplication, user_id: int | None) -> tuple[RiskAssessment, LoanRecommendation]:
+    # Serialised per application: reads committed statements (never a consolidation in progress) and allocates
+    # the next version number without colliding with a concurrent run.
+    lock_application(db, app_.id)
     docs = db.scalars(select(UploadedDocument).where(UploadedDocument.application_id == app_.id)).all()
     if not any(d.processing_status == "completed" for d in docs):
         raise PreconditionFailed("No processed documents — upload and process the borrower's documents first.")
@@ -231,6 +236,11 @@ def run_assessment(db: Session, app_: CreditApplication, user_id: int | None) ->
                                           score=d["score"], weighted_score=d["weighted_score"],
                                           data_status=d["data_status"], factors=_jsonable(d["factors"]),
                                           explanation=d["explanation"]))
+    from app.services import challenger
+
+    a.challenger_output = _jsonable(challenger.score(
+        db, app_.id, period_metrics(latest) if latest else {}, period_metrics(_prior) if _prior else None,
+        recon_dicts, {d.category for d in docs if d.processing_status == "completed"}))
     db.add(a)
     db.flush()
     compute_application_ratios(db, app_.id, policy["thresholds"], assessment_id=a.id, persist=True)

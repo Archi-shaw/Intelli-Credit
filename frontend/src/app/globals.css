@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 216 33% 98%;
+    --foreground: 220 39% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 39% 11%;
+    --primary: 214 72% 28%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 216 25% 94%;
+    --secondary-foreground: 220 39% 15%;
+    --muted: 216 25% 95%;
+    --muted-foreground: 218 13% 42%;
+    --accent: 199 89% 94%;
+    --accent-foreground: 213 74% 25%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 61% 32%;
+    --warning: 35 92% 40%;
+    --border: 216 22% 88%;
+    --input: 216 22% 84%;
+    --ring: 214 72% 40%;
+    --radius: 0.5rem;
+    --sidebar: 218 52% 13%;
+    --sidebar-foreground: 214 32% 91%;
+    --sidebar-muted: 216 20% 62%;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground antialiased; font-feature-settings: "tnum" 1, "cv11" 1; }
+  h1, h2, h3 { @apply tracking-tight; }
+  :focus-visible { @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background; }
+}
+
+@layer components {
+  .num { font-variant-numeric: tabular-nums; }
+  .prose-sm p + p { @apply mt-2; }
+}

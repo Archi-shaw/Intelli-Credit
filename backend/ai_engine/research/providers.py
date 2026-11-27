@@ -7,6 +7,7 @@ reports "No verified information found" rather than inventing results.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -64,11 +65,14 @@ def parse_published(value) -> date | None:
     return None
 
 
+NOT_CONFIGURED = "No verified external research available: provider not configured."
+
+
 class SearchProvider:
     name = "none"
 
     def search(self, query: str, max_results: int = 6) -> list[SearchResult]:
-        raise SearchNotConfigured("No search provider configured. Set SEARCH_PROVIDER and SEARCH_API_KEY.")
+        raise SearchNotConfigured(NOT_CONFIGURED)
 
 
 class NullSearch(SearchProvider):
@@ -76,13 +80,49 @@ class NullSearch(SearchProvider):
 
 
 class _HTTPProvider(SearchProvider):
+    """Shared HTTP behaviour: bounded timeouts, one retry on timeouts/5xx (never on 429), strict JSON parsing."""
+
+    retries = 1
+
     def __init__(self, api_key: str, client: httpx.Client | None = None):
         if not api_key:
-            raise SearchNotConfigured(f"SEARCH_API_KEY is required for the {self.name} provider.")
+            raise SearchNotConfigured(f"{NOT_CONFIGURED} ({self.name} API key missing)")
         self.api_key = api_key
-        self.client = client or httpx.Client(timeout=20.0)
+        self.client = client or httpx.Client(timeout=httpx.Timeout(20.0, connect=5.0))
 
-    def _check(self, resp: httpx.Response):
+    def _send(self, method: str, url: str, **kw) -> dict:
+        last: Exception | None = None
+        for attempt in range(self.retries + 1):
+            try:
+                resp = self.client.request(method, url, **kw)
+            except httpx.TimeoutException as exc:
+                last = SearchError(f"{self.name} request timed out.")
+            except httpx.HTTPError as exc:
+                last = SearchError(f"{self.name} request failed: {type(exc).__name__}.")
+            else:
+                if resp.status_code == 429:
+                    raise SearchError(f"{self.name} rate limit reached.", rate_limited=True)
+                if resp.status_code in (401, 403):
+                    raise SearchError(f"{self.name} rejected the API key (HTTP {resp.status_code}).")
+                if resp.status_code >= 500:
+                    last = SearchError(f"{self.name} search failed (HTTP {resp.status_code}).")
+                elif resp.status_code >= 400:
+                    if _is_auth_error(resp):  # e.g. Brave answers an invalid token with 422 SUBSCRIPTION_TOKEN_INVALID
+                        raise SearchError(f"{self.name} rejected the API key (HTTP {resp.status_code}).")
+                    raise SearchError(f"{self.name} search failed (HTTP {resp.status_code}).")
+                else:
+                    try:
+                        data = resp.json()
+                    except ValueError as exc:
+                        raise SearchError(f"{self.name} returned an invalid (non-JSON) response.") from exc
+                    if not isinstance(data, dict):
+                        raise SearchError(f"{self.name} returned an unexpected response shape.")
+                    return data
+            if attempt < self.retries:
+                time.sleep(0.5 * (attempt + 1))
+        raise last  # type: ignore[misc]
+
+    def _check(self, resp: httpx.Response):  # kept for backwards compatibility
         if resp.status_code == 429:
             raise SearchError(f"{self.name} rate limit reached.", rate_limited=True)
         if resp.status_code in (401, 403):
@@ -91,24 +131,39 @@ class _HTTPProvider(SearchProvider):
             raise SearchError(f"{self.name} search failed (HTTP {resp.status_code}).")
 
 
+def _is_auth_error(resp: httpx.Response) -> bool:
+    try:
+        err = resp.json().get("error")
+    except (ValueError, AttributeError):
+        return False
+    if isinstance(err, dict):
+        code = str(err.get("code", "")).upper()
+        return "TOKEN" in code or "AUTH" in code or (err.get("meta") or {}).get("component") == "authentication"
+    return isinstance(err, str) and "api key" in err.lower()
+
+
+def _valid_url(u) -> bool:
+    return isinstance(u, str) and urlparse(u).scheme in ("http", "https") and bool(urlparse(u).netloc)
+
+
+def _items(data: dict, *path: str) -> list[dict]:
+    cur = data
+    for p in path:
+        cur = cur.get(p, {}) if isinstance(cur, dict) else {}
+    return [r for r in (cur if isinstance(cur, list) else []) if isinstance(r, dict)]
+
+
 class TavilySearch(_HTTPProvider):
     name = "tavily"
 
     def search(self, query: str, max_results: int = 6) -> list[SearchResult]:
-        try:
-            resp = self.client.post(
-                "https://api.tavily.com/search",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"query": query, "max_results": max_results, "search_depth": "basic", "include_answer": False},
-            )
-        except httpx.HTTPError as exc:
-            raise SearchError(f"Tavily request failed: {exc}") from exc
-        self._check(resp)
+        data = self._send("POST", "https://api.tavily.com/search", headers={"Authorization": f"Bearer {self.api_key}"},
+                          json={"query": query, "max_results": max_results, "search_depth": "basic", "include_answer": False})
         out = []
-        for r in resp.json().get("results", []):
-            if not r.get("url"):
+        for r in _items(data, "results"):
+            if not _valid_url(r.get("url")):
                 continue
-            out.append(SearchResult(title=r.get("title") or r["url"], url=r["url"], snippet=r.get("content") or "",
+            out.append(SearchResult(title=str(r.get("title") or r["url"]), url=r["url"], snippet=str(r.get("content") or ""),
                                     source_name=_domain(r["url"]), published=parse_published(r.get("published_date"))))
         return out
 
@@ -117,21 +172,15 @@ class BraveSearch(_HTTPProvider):
     name = "brave"
 
     def search(self, query: str, max_results: int = 6) -> list[SearchResult]:
-        try:
-            resp = self.client.get(
-                "https://api.search.brave.com/res/v1/web/search",
-                params={"q": query, "count": max_results, "country": "IN"},
-                headers={"X-Subscription-Token": self.api_key, "Accept": "application/json"},
-            )
-        except httpx.HTTPError as exc:
-            raise SearchError(f"Brave request failed: {exc}") from exc
-        self._check(resp)
+        data = self._send("GET", "https://api.search.brave.com/res/v1/web/search",
+                          params={"q": query, "count": max_results, "country": "IN"},
+                          headers={"X-Subscription-Token": self.api_key, "Accept": "application/json"})
         out = []
-        for r in resp.json().get("web", {}).get("results", []):
-            if not r.get("url"):
+        for r in _items(data, "web", "results"):
+            if not _valid_url(r.get("url")):
                 continue
-            out.append(SearchResult(title=re.sub(r"<[^>]+>", "", r.get("title") or r["url"]), url=r["url"],
-                                    snippet=re.sub(r"<[^>]+>", "", r.get("description") or ""),
+            out.append(SearchResult(title=re.sub(r"<[^>]+>", "", str(r.get("title") or r["url"])), url=r["url"],
+                                    snippet=re.sub(r"<[^>]+>", "", str(r.get("description") or "")),
                                     source_name=(r.get("profile") or {}).get("name") or _domain(r["url"]),
                                     published=parse_published(r.get("page_age") or r.get("age"))))
         return out
@@ -141,19 +190,15 @@ class SerpAPISearch(_HTTPProvider):
     name = "serpapi"
 
     def search(self, query: str, max_results: int = 6) -> list[SearchResult]:
-        try:
-            resp = self.client.get(
-                "https://serpapi.com/search.json",
-                params={"engine": "google", "q": query, "num": max_results, "gl": "in", "hl": "en", "api_key": self.api_key},
-            )
-        except httpx.HTTPError as exc:
-            raise SearchError(f"SerpAPI request failed: {exc}") from exc
-        self._check(resp)
+        data = self._send("GET", "https://serpapi.com/search.json",
+                          params={"engine": "google", "q": query, "num": max_results, "gl": "in", "hl": "en", "api_key": self.api_key})
+        if data.get("error"):
+            raise SearchError(f"serpapi error: {str(data['error'])[:120]}")
         out = []
-        for r in resp.json().get("organic_results", [])[:max_results]:
-            if not r.get("link"):
+        for r in _items(data, "organic_results")[:max_results]:
+            if not _valid_url(r.get("link")):
                 continue
-            out.append(SearchResult(title=r.get("title") or r["link"], url=r["link"], snippet=r.get("snippet") or "",
+            out.append(SearchResult(title=str(r.get("title") or r["link"]), url=r["link"], snippet=str(r.get("snippet") or ""),
                                     source_name=r.get("source") or _domain(r["link"]), published=parse_published(r.get("date"))))
         return out
 

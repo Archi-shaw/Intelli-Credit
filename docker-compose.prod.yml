@@ -1,0 +1,41 @@
+# Production-oriented overrides. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Required environment (e.g. from a secrets manager or a root .env that is NOT committed):
+#   SECRET_KEY, POSTGRES_PASSWORD, APP_DB_PASSWORD, PUBLIC_ORIGIN (https://credit.example.com)
+# Terminate TLS in front of the frontend (reverse proxy / load balancer); cookies are Secure-only.
+x-prod-env: &prod-env
+  ENVIRONMENT: production
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY (>= 32 random characters)}
+  COOKIE_SECURE: "true"
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  CORS_ORIGINS: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN}
+  DATABASE_URL: postgresql+psycopg://${DB_APP_ROLE:-intellicredit_app}:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-intellicredit}
+  MIGRATION_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-intelli}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-intellicredit}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    ports: !reset []
+    restart: unless-stopped
+  redis:
+    restart: unless-stopped
+  migrate:
+    environment: *prod-env
+  api:
+    environment: *prod-env
+    ports: !reset []
+    deploy:
+      resources: {limits: {cpus: "2", memory: 2g}}
+  worker:
+    environment: *prod-env
+    deploy:
+      resources: {limits: {cpus: "2", memory: 3g}}
+  frontend:
+    ports: ["${IC_WEB_BIND:-127.0.0.1}:${IC_WEB_PORT:-3080}:3000"]
+  seed:
+    profiles: [never]

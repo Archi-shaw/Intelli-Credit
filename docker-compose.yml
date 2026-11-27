@@ -1,0 +1,116 @@
+# Intelli-Credit — development stack.
+#   docker compose up -d --build            # db, redis, migrations, api, worker, frontend
+#   docker compose --profile seed run --rm seed   # demo orgs, users and synthetic borrowers
+# Host ports are configurable and chosen to avoid the local dev containers (5433/6380) and dev servers.
+name: intellicredit
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  SECRET_KEY: ${SECRET_KEY:-dev-only-secret-change-me-0123456789abcdef}
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  CORS_ORIGINS: http://localhost:${IC_WEB_PORT:-3080}
+  # The API and worker connect as the non-superuser role so PostgreSQL row-level security applies.
+  DATABASE_URL: postgresql+psycopg://${DB_APP_ROLE:-intellicredit_app}:${APP_DB_PASSWORD:-dev_app_role_pw_change_me}@db:5432/${POSTGRES_DB:-intellicredit}
+  MIGRATION_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-intelli}:${POSTGRES_PASSWORD:-intelli_dev_pw}@db:5432/${POSTGRES_DB:-intellicredit}
+  DB_APP_ROLE: ${DB_APP_ROLE:-intellicredit_app}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-dev_app_role_pw_change_me}
+  REDIS_URL: redis://redis:6379/0
+  JOB_BACKEND: celery
+  TRUSTED_PROXIES: 127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+  STORAGE_DIR: /app/storage
+  LLM_PROVIDER: ${LLM_PROVIDER:-none}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_MODEL: ${LLM_MODEL:-claude-opus-5-5}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local-hash}
+  EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+  SEARCH_PROVIDER: ${SEARCH_PROVIDER:-none}
+  SEARCH_API_KEY: ${SEARCH_API_KEY:-}
+  DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-intelli}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-intelli_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-intellicredit}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["127.0.0.1:${IC_DB_PORT:-5435}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build: ./backend
+    image: intellicredit-backend:latest
+    command: ["migrate"]
+    environment: *backend-env
+    depends_on:
+      db: {condition: service_healthy}
+    restart: "no"
+
+  api:
+    image: intellicredit-backend:latest
+    command: ["api"]
+    environment: *backend-env
+    volumes: [storage:/app/storage]
+    ports: ["127.0.0.1:${IC_API_PORT:-8080}:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  worker:
+    image: intellicredit-backend:latest
+    command: ["worker"]
+    environment: *backend-env
+    volumes: [storage:/app/storage]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args: {BACKEND_URL: "http://api:8000"}
+    image: intellicredit-frontend:latest
+    ports: ["127.0.0.1:${IC_WEB_PORT:-3080}:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+
+  seed:
+    image: intellicredit-backend:latest
+    command: ["seed"]
+    environment: *backend-env
+    volumes: [storage:/app/storage]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    profiles: [seed]
+
+volumes:
+  pgdata:
+  redisdata:
+  storage:

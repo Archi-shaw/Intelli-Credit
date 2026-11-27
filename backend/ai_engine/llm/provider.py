@@ -38,7 +38,12 @@ class LLMProvider:
     def available(self) -> bool:
         return False
 
+    supports_structured = False
+
     def generate(self, *, system: str, messages: list[dict], max_tokens: int = 4000) -> LLMResult:
+        raise LLMUnavailable("No LLM provider is configured. Set LLM_PROVIDER and LLM_API_KEY.")
+
+    def generate_json(self, *, system: str, messages: list[dict], schema: dict, max_tokens: int = 4000) -> tuple[dict, LLMResult]:
         raise LLMUnavailable("No LLM provider is configured. Set LLM_PROVIDER and LLM_API_KEY.")
 
 
@@ -60,6 +65,7 @@ class AnthropicProvider(LLMProvider):
         if api_key:
             kwargs["api_key"] = api_key
         self._client = anthropic.Anthropic(**kwargs)
+        self._timeout = timeout
         self.model = model
         self.effort = effort
 
@@ -67,7 +73,9 @@ class AnthropicProvider(LLMProvider):
     def available(self) -> bool:
         return True
 
-    def generate(self, *, system: str, messages: list[dict], max_tokens: int = 4000) -> LLMResult:
+    supports_structured = True
+
+    def _create(self, *, system: str, messages: list[dict], max_tokens: int, output_config: dict):
         a = self._anthropic
         try:
             # Server-side refusal fallback ("default" routing) keeps an answer flowing if a request is declined.
@@ -76,7 +84,7 @@ class AnthropicProvider(LLMProvider):
                 max_tokens=max_tokens,
                 system=system,
                 messages=messages,
-                output_config={"effort": self.effort},
+                output_config=output_config,
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
@@ -92,6 +100,8 @@ class AnthropicProvider(LLMProvider):
             raise LLMError("LLM rate limit reached — please retry shortly.", retryable=True) from exc
         except a.APIStatusError as exc:
             raise LLMError(f"LLM service error ({exc.status_code}).", retryable=exc.status_code >= 500) from exc
+        except a.APITimeoutError as exc:
+            raise LLMError(f"LLM request timed out after {self._timeout:.0f}s.", retryable=True) from exc
         except a.APIConnectionError as exc:
             raise LLMError("Could not reach the LLM service.", retryable=True) from exc
 
@@ -102,6 +112,23 @@ class AnthropicProvider(LLMProvider):
             raise LLMError("The model returned an empty response.", retryable=True)
         return LLMResult(text=text, model=getattr(response, "model", self.model), stop_reason=response.stop_reason,
                          provider=self.name)
+
+    def generate(self, *, system: str, messages: list[dict], max_tokens: int = 4000) -> LLMResult:
+        return self._create(system=system, messages=messages, max_tokens=max_tokens,
+                            output_config={"effort": self.effort})
+
+    def generate_json(self, *, system: str, messages: list[dict], schema: dict, max_tokens: int = 4000) -> tuple[dict, LLMResult]:
+        """Structured output: the response's text is guaranteed to be JSON matching ``schema``."""
+        import json
+
+        res = self._create(system=system, messages=messages, max_tokens=max_tokens,
+                           output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}})
+        if res.stop_reason == "max_tokens":
+            raise LLMError("The structured response was truncated (max_tokens).", retryable=True)
+        try:
+            return json.loads(res.text), res
+        except ValueError as exc:
+            raise LLMError("The model returned invalid JSON for a structured request.") from exc
 
 
 _cache: dict[tuple, LLMProvider] = {}

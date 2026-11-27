@@ -42,7 +42,10 @@ def save_bytes(subdir: str, data: bytes, extension: str) -> str:
     full = storage_root() / rel_path
     with open(full, "wb") as fh:
         fh.write(data)
-    os.chmod(full, 0o600)
+    try:
+        os.chmod(full, 0o600)
+    except OSError:  # object-storage FUSE mounts (e.g. Cloud Storage) have no POSIX modes; access is IAM-controlled
+        pass
     return str(rel_path)
 
 

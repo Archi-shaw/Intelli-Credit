@@ -142,4 +142,6 @@ def get_reconciliation_for_org(db: Session, recon_id: int, current: CurrentUser)
 
 
 def client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    from app.core.netutil import client_ip as resolve
+
+    return resolve(request)

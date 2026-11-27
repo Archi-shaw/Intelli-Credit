@@ -71,7 +71,8 @@ class EmbeddingVector(TypeDecorator):
 
 
 def _make_engine(url: str):
-    kwargs: dict = {"pool_pre_ping": True, "future": True}
+    # hide_parameters: SQL errors and logs never contain bound values (customer data, document text, hashes).
+    kwargs: dict = {"pool_pre_ping": True, "future": True, "hide_parameters": True}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
         if ":memory:" in url or url.endswith("sqlite://"):
@@ -127,6 +128,25 @@ def system_session() -> Session:
     db = SessionLocal()
     db.info["rls_bypass"] = True
     return db
+
+
+# Key space for per-application advisory locks: pg_advisory_xact_lock(namespace, application_id).
+_APPLICATION_LOCK_NAMESPACE = 0x1C0A
+
+
+def lock_application(db: Session, application_id: int) -> None:
+    """Serialise the writers of one application's derived data across threads, processes and API instances.
+
+    Consolidated statements, persisted ratios, reconciliation run numbers and assessment versions are rebuilt
+    from the application's committed inputs. Two transactions doing that at once (documents finishing in
+    different workers, a request racing a job, a double submit) would each miss the other's uncommitted rows.
+    This takes a PostgreSQL *transaction-scoped* advisory lock: a concurrent writer waits here until the holder
+    commits or rolls back, and its following statements then see the holder's committed rows (READ COMMITTED).
+    Call it before reading the data being rebuilt and before writing any row. Re-entrant within a transaction.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:ns, :app)"),
+                   {"ns": _APPLICATION_LOCK_NAMESPACE, "app": int(application_id)})
 
 
 def rebind_engine(url: str) -> None:

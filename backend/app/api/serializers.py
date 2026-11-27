@@ -154,6 +154,7 @@ def assessment(a: RiskAssessment) -> dict:
             "missing_information": a.missing_information, "red_flags": a.red_flags, "five_cs": a.five_cs,
             "risk_categories": a.risk_categories, "confidence_breakdown": a.confidence_breakdown,
             "ratios": a.ratios_snapshot, "summary": a.summary, "model_label": a.model_label,
+            "challenger": a.challenger_output,
             "dimensions": [{"key": d.key, "name": d.name, "weight": d.weight, "score": d.score,
                             "weighted_score": d.weighted_score, "data_status": d.data_status, "factors": d.factors,
                             "explanation": d.explanation} for d in a.dimensions],

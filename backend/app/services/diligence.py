@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.core.database import utcnow
 from app.models import CreditApplication, PrimaryObservation, ResearchFinding, ResearchQuery
 from app.services import audit
-from app.services.providers import llm, search
+from app.services.providers import llm, search, search_key
 
 
 def _fixtures(scenario: str | None) -> list[dict]:
@@ -36,7 +36,7 @@ def run_research_for(db: Session, app_: CreditApplication, user_id: int | None) 
     company = app_.company
     cdict = {"name": company.name, "industry": company.industry}
     provider_name = settings.SEARCH_PROVIDER
-    if company.is_synthetic and (provider_name == "none" or not settings.SEARCH_API_KEY):
+    if company.is_synthetic and (provider_name == "none" or not search_key(provider_name)):
         outcomes = synthetic_outcomes(cdict, _fixtures(company.demo_scenario))
         provider_name = "synthetic_fixture"
     else:

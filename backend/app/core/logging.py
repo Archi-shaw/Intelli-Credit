@@ -25,6 +25,7 @@ class JsonFormatter(logging.Formatter):
         payload = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created)) + f".{int(record.msecs):03d}Z",
             "level": record.levelname,
+            "severity": record.levelname,  # Cloud Logging severity
             "logger": record.name,
             "msg": record.getMessage(),
         }
@@ -36,15 +37,30 @@ class JsonFormatter(logging.Formatter):
                 payload[key] = value
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
+            # Picked up automatically by Google Cloud Error Reporting.
+            payload["stack_trace"] = payload["exc"]
+            payload["@type"] = "type.googleapis.com/google.devtools.clouderrorreporting.v1beta1.ReportedErrorEvent"
         return json.dumps(payload, default=str)
+
+
+class TextFormatter(logging.Formatter):
+    """Human-readable lines for local development; still never prints redacted keys."""
+
+    def __init__(self):
+        super().__init__("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        ctx = {k: v for k, v in getattr(record, "ctx", {}).items() if not any(r in k.lower() for r in _REDACT_KEYS)}
+        rid = request_id_var.get()
+        if rid:
+            ctx = {"rid": rid, **ctx}
+        return base + ("  " + " ".join(f"{k}={v}" for k, v in ctx.items()) if ctx else "")
 
 
 def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
     handler = logging.StreamHandler(sys.stdout)
-    if fmt == "json":
-        handler.setFormatter(JsonFormatter())
-    else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(JsonFormatter() if fmt == "json" else TextFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
@@ -55,6 +71,12 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
 
 
 access_log = logging.getLogger("intellicredit.access")
+
+
+def _client(request: Request) -> str | None:
+    from app.core.netutil import client_ip
+
+    return client_ip(request)
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
@@ -71,13 +93,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             response.headers["x-request-id"] = rid
             response.headers.setdefault("x-content-type-options", "nosniff")
             response.headers.setdefault("referrer-policy", "same-origin")
-            response.headers.setdefault("x-frame-options", "DENY")
+            response.headers.setdefault("x-frame-options", "SAMEORIGIN")
             return response
         finally:
             access_log.info(
                 "request",
                 extra={"ctx": {"method": request.method, "path": request.url.path, "status": status,
                                "duration_ms": round((time.perf_counter() - start) * 1000, 1),
-                               "client": request.client.host if request.client else None}},
+                               "client": _client(request)}},
             )
             request_id_var.reset(token)

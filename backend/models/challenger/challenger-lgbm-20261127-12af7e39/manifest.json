@@ -1,0 +1,631 @@
+{
+  "name": "intelli-credit-challenger",
+  "version": "challenger-lgbm-20261127-12af7e39",
+  "created_at": "2026-11-27T09:55:40.669984+00:00",
+  "algorithm": "LightGBM 4.7.0 gradient-boosted trees (binary), monotone constraints",
+  "pipeline_version": "1.0",
+  "python": "3.12.3",
+  "dataset": {
+    "type": "synthetic",
+    "path": "/home/user/Documents/intelli/data/ml/synthetic_credit_v1.csv",
+    "sha256": "2426bfbb38d40c616853713c11728948ddd3d2718776d30825f144c40dc2e85d",
+    "rows": 7630,
+    "borrowers": 4000,
+    "positives": 591,
+    "positive_rate": 0.07745740498034076,
+    "data_origin": [
+      "SYNTHETIC"
+    ],
+    "missing_rates": {
+      "prior_revenue_from_operations": 0.1598,
+      "prior_ebitda": 0.5242,
+      "prior_pat": 0.5242,
+      "trade_receivables": 0.0448,
+      "operating_cash_flow": 0.0817,
+      "gst_turnover": 0.1219,
+      "bank_business_receipts": 0.1219,
+      "gst_bank_variance_pct": 0.1219,
+      "circular_flag": 0.1219,
+      "cheque_returns": 0.1219
+    },
+    "generator": "synthetic-credit-v1",
+    "split_seed": 42
+  },
+  "splits": {
+    "train": {
+      "rows": 4565,
+      "borrowers": 2400,
+      "positives": 363,
+      "positive_rate": 0.0795
+    },
+    "validation": {
+      "rows": 1536,
+      "borrowers": 800,
+      "positives": 115,
+      "positive_rate": 0.0749
+    },
+    "test": {
+      "rows": 1529,
+      "borrowers": 800,
+      "positives": 113,
+      "positive_rate": 0.0739
+    }
+  },
+  "features": [
+    {
+      "name": "log_revenue",
+      "description": "log10 of revenue from operations (business size, \u20b9)",
+      "monotone": 0
+    },
+    {
+      "name": "revenue_growth",
+      "description": "Year-on-year revenue growth, % (NaN without a prior period)",
+      "monotone": 0
+    },
+    {
+      "name": "ebitda_margin",
+      "description": "EBITDA / revenue, %",
+      "monotone": -1
+    },
+    {
+      "name": "net_profit_margin",
+      "description": "Profit after tax / revenue, %",
+      "monotone": -1
+    },
+    {
+      "name": "debt_to_equity",
+      "description": "Total debt / shareholders' equity, x (NaN when equity <= 0)",
+      "monotone": 1
+    },
+    {
+      "name": "net_worth_negative",
+      "description": "1 if shareholders' equity <= 0, else 0",
+      "monotone": 1
+    },
+    {
+      "name": "debt_to_revenue",
+      "description": "Total debt / revenue, x",
+      "monotone": 1
+    },
+    {
+      "name": "current_ratio",
+      "description": "Current assets / current liabilities, x",
+      "monotone": -1
+    },
+    {
+      "name": "interest_coverage",
+      "description": "EBIT / finance costs, x",
+      "monotone": -1
+    },
+    {
+      "name": "ocf_margin",
+      "description": "Operating cash flow / revenue, %",
+      "monotone": -1
+    },
+    {
+      "name": "ocf_to_debt",
+      "description": "Operating cash flow / total debt, x",
+      "monotone": -1
+    },
+    {
+      "name": "working_capital_to_revenue",
+      "description": "(Current assets - current liabilities) / revenue, %",
+      "monotone": -1
+    },
+    {
+      "name": "receivable_days",
+      "description": "Trade receivables / revenue x 365, days",
+      "monotone": 1
+    },
+    {
+      "name": "gst_bank_variance_pct",
+      "description": "|Bank business receipts - GST turnover| / GST turnover, % (NaN if either source missing)",
+      "monotone": 1
+    },
+    {
+      "name": "circular_transactions_flag",
+      "description": "1 if a round-trip (circular) transaction pattern was detected, 0 if screened clean",
+      "monotone": 1
+    },
+    {
+      "name": "cheque_returns",
+      "description": "Cheque / mandate returns in the bank statements (count)",
+      "monotone": 1
+    }
+  ],
+  "params": {
+    "objective": "binary",
+    "metric": [
+      "auc",
+      "binary_logloss"
+    ],
+    "learning_rate": 0.03,
+    "num_leaves": 15,
+    "min_data_in_leaf": 40,
+    "feature_fraction": 0.85,
+    "bagging_fraction": 0.85,
+    "bagging_freq": 1,
+    "lambda_l2": 2.0,
+    "monotone_constraints": [
+      0,
+      0,
+      -1,
+      -1,
+      1,
+      1,
+      1,
+      -1,
+      -1,
+      -1,
+      -1,
+      -1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "monotone_constraints_method": "advanced",
+    "seed": 42,
+    "deterministic": true,
+    "force_row_wise": true,
+    "num_threads": 1,
+    "verbose": -1
+  },
+  "best_iteration": 76,
+  "calibration": {
+    "method": "isotonic",
+    "cv_brier": {
+      "platt": 0.058,
+      "isotonic": 0.05793
+    }
+  },
+  "decision_threshold": 0.25333333333333335,
+  "metrics_test": {
+    "lightgbm_calibrated": {
+      "roc_auc": 0.8296522673866308,
+      "pr_auc": 0.3201839393423783,
+      "precision": 0.3145539906103286,
+      "recall": 0.5929203539823009,
+      "f1": 0.4110429447852761,
+      "threshold": 0.25333333333333335,
+      "confusion_matrix": {
+        "tn": 1270,
+        "fp": 146,
+        "fn": 46,
+        "tp": 67
+      },
+      "brier": 0.05688511092962846
+    },
+    "lightgbm_uncalibrated": {
+      "brier": 0.05700628875544421
+    },
+    "logistic_regression": {
+      "roc_auc": 0.8244650267486626,
+      "pr_auc": 0.3515344036536798,
+      "precision": 0.2647058823529412,
+      "recall": 0.5575221238938053,
+      "f1": 0.358974358974359,
+      "threshold": 0.13986644850086627,
+      "confusion_matrix": {
+        "tn": 1241,
+        "fp": 175,
+        "fn": 50,
+        "tp": 63
+      },
+      "brier": 0.05857039459163636
+    },
+    "policy_scorecard": {
+      "roc_auc": 0.8140999200039998,
+      "pr_auc": 0.3344234298740741,
+      "precision": 0.3333333333333333,
+      "recall": 0.3893805309734513,
+      "f1": 0.35918367346938773,
+      "threshold": 0.2452244604841219,
+      "confusion_matrix": {
+        "tn": 1328,
+        "fp": 88,
+        "fn": 69,
+        "tp": 44
+      },
+      "brier": 0.05838769302722224,
+      "note": "risk = 100 - scorecard score, mapped to a probability by calibration on the validation split"
+    }
+  },
+  "bootstrap_ci_test": {
+    "lightgbm": {
+      "roc_auc": [
+        0.7875,
+        0.8684
+      ],
+      "pr_auc": [
+        0.2504,
+        0.3925
+      ]
+    },
+    "logistic_regression": {
+      "roc_auc": [
+        0.7806,
+        0.8647
+      ],
+      "pr_auc": [
+        0.2715,
+        0.4365
+      ]
+    },
+    "policy_scorecard": {
+      "roc_auc": [
+        0.7676,
+        0.8551
+      ],
+      "pr_auc": [
+        0.2542,
+        0.4308
+      ]
+    },
+    "roc_auc_difference_lightgbm_minus_policy_scorecard": [
+      -0.0023,
+      0.0327
+    ]
+  },
+  "shap_additivity_max_error": 4.884981308350689e-15,
+  "feature_importance": [
+    {
+      "feature": "net_profit_margin",
+      "mean_abs_shap": 0.34775,
+      "gain": 3636.97
+    },
+    {
+      "feature": "interest_coverage",
+      "mean_abs_shap": 0.27784,
+      "gain": 3578.09
+    },
+    {
+      "feature": "debt_to_equity",
+      "mean_abs_shap": 0.17911,
+      "gain": 1353.82
+    },
+    {
+      "feature": "cheque_returns",
+      "mean_abs_shap": 0.13161,
+      "gain": 1363.74
+    },
+    {
+      "feature": "current_ratio",
+      "mean_abs_shap": 0.10926,
+      "gain": 782.77
+    },
+    {
+      "feature": "ebitda_margin",
+      "mean_abs_shap": 0.0959,
+      "gain": 287.95
+    },
+    {
+      "feature": "working_capital_to_revenue",
+      "mean_abs_shap": 0.07657,
+      "gain": 366.92
+    },
+    {
+      "feature": "gst_bank_variance_pct",
+      "mean_abs_shap": 0.04999,
+      "gain": 280.74
+    },
+    {
+      "feature": "revenue_growth",
+      "mean_abs_shap": 0.04643,
+      "gain": 541.47
+    },
+    {
+      "feature": "receivable_days",
+      "mean_abs_shap": 0.03301,
+      "gain": 186.7
+    },
+    {
+      "feature": "circular_transactions_flag",
+      "mean_abs_shap": 0.03109,
+      "gain": 277.49
+    },
+    {
+      "feature": "log_revenue",
+      "mean_abs_shap": 0.02131,
+      "gain": 219.59
+    },
+    {
+      "feature": "debt_to_revenue",
+      "mean_abs_shap": 0.01656,
+      "gain": 100.65
+    },
+    {
+      "feature": "ocf_to_debt",
+      "mean_abs_shap": 0.00603,
+      "gain": 33.11
+    },
+    {
+      "feature": "ocf_margin",
+      "mean_abs_shap": 0.00577,
+      "gain": 40.18
+    },
+    {
+      "feature": "net_worth_negative",
+      "mean_abs_shap": 0.00495,
+      "gain": 74.78
+    }
+  ],
+  "error_analysis": {
+    "by_profile": {
+      "healthy": {
+        "rows": 716,
+        "defaults": 14,
+        "tp": 1,
+        "fn": 13,
+        "fp": 2,
+        "recall": 0.071
+      },
+      "irregular": {
+        "rows": 146,
+        "defaults": 24,
+        "tp": 15,
+        "fn": 9,
+        "fp": 35,
+        "recall": 0.625
+      },
+      "moderate": {
+        "rows": 449,
+        "defaults": 29,
+        "tp": 11,
+        "fn": 18,
+        "fp": 35,
+        "recall": 0.379
+      },
+      "stressed": {
+        "rows": 218,
+        "defaults": 46,
+        "tp": 40,
+        "fn": 6,
+        "fp": 74,
+        "recall": 0.87
+      }
+    },
+    "worst_false_negatives": [
+      {
+        "borrower_id": "SYN-00732",
+        "profile": "moderate",
+        "probability": 0.0035,
+        "top_features": [
+          {
+            "feature": "net_profit_margin",
+            "value": 7.437,
+            "shap_log_odds": -0.2587
+          },
+          {
+            "feature": "interest_coverage",
+            "value": 8.76,
+            "shap_log_odds": -0.2238
+          },
+          {
+            "feature": "debt_to_equity",
+            "value": 0.455,
+            "shap_log_odds": -0.2192
+          },
+          {
+            "feature": "current_ratio",
+            "value": 1.743,
+            "shap_log_odds": -0.142
+          }
+        ]
+      },
+      {
+        "borrower_id": "SYN-00861",
+        "profile": "healthy",
+        "probability": 0.0035,
+        "top_features": [
+          {
+            "feature": "net_profit_margin",
+            "value": 6.259,
+            "shap_log_odds": -0.3095
+          },
+          {
+            "feature": "interest_coverage",
+            "value": 6.371,
+            "shap_log_odds": -0.2262
+          },
+          {
+            "feature": "debt_to_equity",
+            "value": 0.4,
+            "shap_log_odds": -0.2081
+          },
+          {
+            "feature": "ebitda_margin",
+            "value": 13.41,
+            "shap_log_odds": -0.093
+          }
+        ]
+      },
+      {
+        "borrower_id": "SYN-01013",
+        "profile": "healthy",
+        "probability": 0.0035,
+        "top_features": [
+          {
+            "feature": "net_profit_margin",
+            "value": 10.223,
+            "shap_log_odds": -0.3568
+          },
+          {
+            "feature": "interest_coverage",
+            "value": 8.366,
+            "shap_log_odds": -0.2451
+          },
+          {
+            "feature": "debt_to_equity",
+            "value": 0.467,
+            "shap_log_odds": -0.2056
+          },
+          {
+            "feature": "ebitda_margin",
+            "value": 18.727,
+            "shap_log_odds": -0.1195
+          }
+        ]
+      },
+      {
+        "borrower_id": "SYN-02209",
+        "profile": "healthy",
+        "probability": 0.0035,
+        "top_features": [
+          {
+            "feature": "net_profit_margin",
+            "value": 8.428,
+            "shap_log_odds": -0.2723
+          },
+          {
+            "feature": "interest_coverage",
+            "value": 4.521,
+            "shap_log_odds": -0.2133
+          },
+          {
+            "feature": "current_ratio",
+            "value": 1.841,
+            "shap_log_odds": -0.157
+          },
+          {
+            "feature": "debt_to_equity",
+            "value": 0.766,
+            "shap_log_odds": -0.1149
+          }
+        ]
+      },
+      {
+        "borrower_id": "SYN-00114",
+        "profile": "healthy",
+        "probability": 0.0111,
+        "top_features": [
+          {
+            "feature": "net_profit_margin",
+            "value": 8.78,
+            "shap_log_odds": -0.3256
+          },
+          {
+            "feature": "interest_coverage",
+            "value": 7.596,
+            "shap_log_odds": -0.2278
+          },
+          {
+            "feature": "debt_to_equity",
+            "value": 0.38,
+            "shap_log_odds": -0.2175
+          },
+          {
+            "feature": "ebitda_margin",
+            "value": 15.115,
+            "shap_log_odds": -0.1198
+          }
+        ]
+      }
+    ]
+  },
+  "calibration_curves_test": {
+    "LightGBM (calibrated)": {
+      "mean_predicted": [
+        0.0035,
+        0.0111,
+        0.0142,
+        0.0252,
+        0.0727,
+        0.0855,
+        0.2469,
+        0.4241
+      ],
+      "observed_rate": [
+        0.0114,
+        0.0339,
+        0.0114,
+        0.0169,
+        0.0439,
+        0.1126,
+        0.2568,
+        0.3816
+      ]
+    },
+    "LightGBM (uncalibrated)": {
+      "mean_predicted": [
+        0.0141,
+        0.0152,
+        0.0169,
+        0.0196,
+        0.0246,
+        0.0326,
+        0.0489,
+        0.085,
+        0.1549,
+        0.3668
+      ],
+      "observed_rate": [
+        0.0065,
+        0.0196,
+        0.0261,
+        0.0196,
+        0.0131,
+        0.0066,
+        0.0458,
+        0.098,
+        0.1634,
+        0.3399
+      ]
+    },
+    "Logistic regression": {
+      "mean_predicted": [
+        0.0029,
+        0.007,
+        0.0113,
+        0.0168,
+        0.0244,
+        0.0347,
+        0.0519,
+        0.0829,
+        0.1521,
+        0.4213
+      ],
+      "observed_rate": [
+        0.0131,
+        0.0131,
+        0.0327,
+        0.0196,
+        0.0065,
+        0.0197,
+        0.0392,
+        0.0915,
+        0.1699,
+        0.3333
+      ]
+    },
+    "Policy scorecard (calibrated)": {
+      "mean_predicted": [
+        0.0092,
+        0.0126,
+        0.0157,
+        0.0198,
+        0.025,
+        0.0327,
+        0.0456,
+        0.0688,
+        0.1429,
+        0.348
+      ],
+      "observed_rate": [
+        0.0128,
+        0.0197,
+        0.0128,
+        0.0196,
+        0.039,
+        0.0274,
+        0.038,
+        0.0743,
+        0.183,
+        0.3137
+      ]
+    }
+  },
+  "status": "experimental",
+  "approved_for_decisions": false,
+  "evaluation_status": "Evaluated on SYNTHETIC labels only \u2014 not validated on real loan outcomes. Must not be used for lending decisions."
+}

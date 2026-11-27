@@ -196,7 +196,7 @@ def process_document(db: Session, job: ProcessingJob) -> dict:
     if chunks:
         emb = embedder()
         try:
-            vectors = emb.embed([c.text for c in chunks])
+            vectors = emb.embed([c.text for c in chunks], input_type="document")
             model_id = emb.model_id
         except EmbeddingError as exc:
             vectors, model_id = [None] * len(chunks), "none"
@@ -207,6 +207,13 @@ def process_document(db: Session, job: ProcessingJob) -> dict:
 
     warnings = list(dict.fromkeys(parsed.warnings + result.warnings + tables.warnings + ([chunk_warning] if chunk_warning else [])))
     has_data = bool(result.metrics or tables.bank_transactions or tables.gst_rows or tables.shareholding)
+    progress(95, "Persisting results")  # commits the extracted rows; the document is still "processing"
+
+    # Everything below commits in one transaction with the job's completion, so a client never sees the document
+    # as completed before the application's statements include it.
+    from app.services.financials import consolidate_statements
+
+    consolidate_statements(db, doc.application_id)  # takes the application lock before any write below is flushed
     doc.warnings = warnings[:50]
     doc.detected_unit = result.unit.unit if result.unit and result.unit.explicit else None
     doc.detected_currency = result.unit.currency if result.unit else None
@@ -216,11 +223,6 @@ def process_document(db: Session, job: ProcessingJob) -> dict:
     doc.processing_status = "completed"
     doc.processed_at = utcnow()
     doc.error_message = None
-    progress(95, "Persisting results")
-
-    from app.services.financials import consolidate_statements
-
-    consolidate_statements(db, doc.application_id)
     _advance_application(db, doc.application_id)
     audit.record(db, organization_id=doc.organization_id, user_id=None, action="document.processed",
                  summary=f"Processed {doc.original_filename}: {len(result.metrics)} metrics, "

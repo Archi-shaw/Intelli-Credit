@@ -33,6 +33,7 @@ rapidocr-onnxruntime==1.4.4
 # --- Analytics / ML ---
 numpy==1.26.4
 scikit-learn==1.6.1
+lightgbm==4.7.0
 
 # --- Reporting ---
 reportlab==4.4.0

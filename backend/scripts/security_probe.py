@@ -1,7 +1,7 @@
 """Live security probes against a running Intelli-Credit stack, through the web proxy like a browser.
 
 Usage:
-  .venv/bin/python scripts/security_probe.py --base http://localhost:3080 [--env-file ../.env]
+  DEMO_PASSWORD=... .venv/bin/python scripts/security_probe.py --base http://localhost:3080 [--env-file ../.env]
 
 Needs the demo seed (Meridian and Northwind organisations). Checks authentication, CSRF, RBAC, tenant isolation,
 private document downloads, injection and NUL-byte handling on every string filter, secret exposure, error
@@ -21,16 +21,16 @@ from pathlib import Path
 
 import httpx
 
-DEFAULT_PASSWORD = "IntelliDemo2026!"  # the documented development default (README → Demo accounts)
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=os.environ.get("IC_BASE_URL", "http://localhost:3080"))
-    ap.add_argument("--password", default=os.environ.get("DEMO_PASSWORD", DEFAULT_PASSWORD))
+    ap.add_argument("--password", default=os.environ.get("DEMO_PASSWORD"),
+                    help="demo user password (or set DEMO_PASSWORD); printed by the seed command")
     ap.add_argument("--env-file", default=str(Path(__file__).resolve().parents[2] / ".env"),
                     help="server env file whose secret values must never appear in API responses (skipped if absent)")
     args = ap.parse_args()
+    if not args.password:
+        ap.error("set DEMO_PASSWORD or pass --password (the demo password is printed by the seed command; see README)")
     api = args.base.rstrip("/") + "/api/v1"
     fails: list[str] = []
 

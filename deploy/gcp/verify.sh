@@ -23,6 +23,7 @@ check "API is not reachable from the internet" \
   "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -m 10 \"\$(gcloud run services describe ${PREFIX}-api --region $REGION --project $PROJECT_ID --format='value(status.url)')/health\")\" != 200 ]"
 
 echo "== End-to-end workflow through the public web URL"
+: "${DEMO_PASSWORD:?set DEMO_PASSWORD to the password used when seeding}"
 "$ROOT/backend/.venv/bin/python" "$ROOT/backend/scripts/verify_stack.py" --base "$WEB_URL" || fail=1
 
 echo "== Recent errors in Cloud Logging (last 30 minutes)"

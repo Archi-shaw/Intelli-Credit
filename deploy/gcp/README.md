@@ -74,7 +74,7 @@ gcloud run jobs deploy ic-seed --image=REGION-docker.pkg.dev/PROJECT/intellicred
 ## Verify
 
 ```bash
-PROJECT_ID=my-project REGION=asia-south1 WEB_URL=https://ic-web-xxxx.asia-south1.run.app deploy/gcp/verify.sh
+PROJECT_ID=my-project REGION=asia-south1 WEB_URL=https://ic-web-xxxx.asia-south1.run.app DEMO_PASSWORD=<seed password> deploy/gcp/verify.sh
 ```
 
 `verify.sh` checks that Cloud SQL and Redis have no public endpoints, the bucket blocks public access, the API is

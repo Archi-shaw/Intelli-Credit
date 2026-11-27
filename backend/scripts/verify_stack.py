@@ -25,10 +25,13 @@ REPO = Path(__file__).resolve().parents[2]
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=os.environ.get("IC_BASE_URL", "http://localhost:3080"))
-    ap.add_argument("--password", default=os.environ.get("DEMO_PASSWORD", "IntelliDemo2026!"))
+    ap.add_argument("--password", default=os.environ.get("DEMO_PASSWORD"),
+                    help="demo user password (or set DEMO_PASSWORD); printed by the seed command")
     ap.add_argument("--case", default="inconsistent", choices=["healthy", "inconsistent", "stressed"])
     ap.add_argument("--timeout", type=int, default=180)
     args = ap.parse_args()
+    if not args.password:
+        ap.error("set DEMO_PASSWORD or pass --password (the demo password is printed by the seed command; see README)")
     api = args.base.rstrip("/") + "/api/v1"
     failures: list[str] = []
 

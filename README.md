@@ -449,11 +449,11 @@ database.
 Smoke and security checks against a running stack:
 
 ```bash
-cd backend && .venv/bin/python scripts/verify_stack.py --base http://localhost:3080
+cd backend && DEMO_PASSWORD=<demo password> .venv/bin/python scripts/verify_stack.py --base http://localhost:3080
 ```
 
 ```bash
-cd backend && .venv/bin/python scripts/security_probe.py --base http://localhost:3080
+cd backend && DEMO_PASSWORD=<demo password> .venv/bin/python scripts/security_probe.py --base http://localhost:3080
 ```
 
 `verify_stack.py` runs the full workflow (upload → processing → reconciliation → assessment → CAM download →

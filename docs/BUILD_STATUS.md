@@ -1,5 +1,57 @@
 # Intelli-Credit — build status
 
+## 0a. Vercel Hobby adaptation (2026-11-29, branch `deploy/vercel-hobby`)
+
+Goal: run the real application on Vercel Hobby with no Celery worker, no Redis and no persistent disk
+([DEPLOYMENT_VERCEL.md](DEPLOYMENT_VERCEL.md)). Docker Compose, Celery and local development are unchanged.
+
+**What changed**
+
+- **`JOB_BACKEND=request`.** Jobs stay `queued` in PostgreSQL. `POST /api/v1/assessments/{id}/jobs/run-next` and
+  `POST /api/v1/jobs/{id}/run` run one attempt inside an authenticated, organisation-scoped request, using an
+  atomic claim, so a job never runs twice. Stale `running` jobs are reclaimed after `JOB_STALE_MINUTES`. The same
+  handlers as the Celery task are used (the Celery task was already a thin wrapper around them), and nothing runs
+  fire-and-forget.
+- **Frontend `useJobRunner`.** While the Documents or CAM tab shows queued work, each status poll triggers
+  `run-next`, with one call in flight. It stops after the first reply if the server reports a worker backend.
+- **`STORAGE_BACKEND=database`** stores document and CAM bytes in `stored_files`.
+- **`RATE_LIMIT_BACKEND=postgres`** keeps all-or-nothing token buckets in one transaction using database time, and
+  the login lockout in `login_failures`.
+- **`DB_POOL=null`** disables connection pooling and prepared statements, for transaction-mode poolers.
+- **`CLIENT_IP_HEADER`** reads the client IP from a platform-set header.
+- **Migration 0003** adds the three tables plus a job index.
+- **Vercel safety guard.** With `VERCEL` set, the API refuses to start with disk storage, a background job backend,
+  or Redis rate limits without a Redis URL. The production-settings guard now also runs when the app is created, in
+  case a runtime skips the ASGI lifespan.
+- **Vercel packaging.** `backend/pyproject.toml` + `uv.lock` hold the runtime-only dependency set, with headless
+  OpenCV and no Celery, Redis, pytest, scikit-learn, matplotlib or LightGBM/SciPy. `backend/vercel.json` and
+  `frontend/vercel.json` set region `bom1` and 300 s. DejaVu fonts are bundled for the CAM PDF, with their license.
+- **NumPy LightGBM scorer.** `ai_engine/risk_model/challenger/treemodel.py` scores the same `model.txt` with the
+  same TreeSHAP when LightGBM is not installed. It matches LightGBM to within 1e-10 on 400 rows covering missing
+  values, zeros and exact thresholds.
+- **Uploads.** `MAX_UPLOAD_MB` is configurable in the UI with a client-side check (4 MB on Vercel).
+- **Scripts.** `deploy/vercel/setup-database.sh` runs migrations, creates the role and seeds the synthetic data.
+  `verify_stack.py` now drives request-mode jobs.
+
+**Defect found by profiling and fixed:** ONNX Runtime sized OCR thread pools from the host's core count. Under a
+1-CPU quota one page took **90.3 s instead of 11.7 s**, with identical output. OCR threads now follow the cgroup
+CPU quota (`OCR_THREADS` overrides). This also speeds up the CPU-limited Docker worker.
+
+**Verified**
+
+| Check | Result |
+|---|---|
+| Backend pytest (all suites) | **121 passed, 11 skipped** (opt-in live provider tests); includes 8 new serverless tests and 2 LightGBM-equivalence tests |
+| Docker Compose with Celery + Redis on this branch (isolated project) | `verify_stack.py` **PASS**: migrations 0003, Celery processing, CAM PDF/DOCX with bundled fonts, challenger, tenant isolation |
+| Frontend | Vitest 22 passed (3 new for `useJobRunner`); `tsc` clean; Vercel-mode `next build` passed |
+| Migrations | 0003 head; `alembic check` shows no drift; downgrade to 0002 and upgrade again succeed |
+| `setup-database.sh` with a non-superuser owner (as on Neon) | Migrations, app role (no superuser, no BYPASSRLS, 31 FORCE-RLS tables), seed of 10 jobs in 14 s |
+| Operation profile at 1 vCPU / 2 GB with `VERCEL=1` (table in DEPLOYMENT_VERCEL.md) | All operations completed in one request each. Slowest: 10-page scanned PDF 66 s; peak memory 893 MB |
+| `vercel build` (Vercel CLI, local) | API: dependencies read from `uv.lock`, bundle **463.41 MB, under the 500 MB Python limit** (583.64 MB before removing LightGBM/SciPy). Vercel bundles part of it and installs the rest at function start |
+
+**Not verified:** a real Vercel deployment and Neon database (that needs the account owner's sign-in), cold-start
+time with Vercel's runtime dependency installation, and client-IP attribution through the web-to-API rewrite.
+
 ## 0. Compute Engine deployment preparation (2026-11-29)
 
 Target: one Ubuntu 24.04 `e2-standard-4` VM in `asia-south1` that runs the Compose production overlay behind nginx

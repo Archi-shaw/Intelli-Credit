@@ -18,3 +18,6 @@ frontend/tsconfig.tsbuildinfo
 
 # local backups (database dumps, storage, working-tree snapshots)
 backups/
+
+# Vercel CLI project links and local build output
+.vercel/

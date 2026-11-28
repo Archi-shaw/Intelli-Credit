@@ -1,0 +1,42 @@
+# Packaging for the Vercel deployment of the API (docs/DEPLOYMENT_VERCEL.md).
+# Docker, Compose and local development keep using requirements.txt (which adds Celery, Redis, pytest, LightGBM
+# and the training-only scikit-learn / matplotlib). Runtime versions here are pinned to the same releases.
+[project]
+name = "intellicredit-api"
+version = "1.0.0"
+description = "Intelli-Credit API (FastAPI) — serverless runtime dependencies"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.115.12",
+  "pydantic==2.11.4",
+  "pydantic-settings==2.9.1",
+  "email-validator==2.2.0",
+  "python-multipart==0.0.20",
+  "httpx==0.28.1",
+  "SQLAlchemy==2.0.40",
+  "psycopg[binary]==3.2.9",
+  "pgvector==0.4.1",
+  "PyJWT==2.10.1",
+  "bcrypt==4.3.0",
+  "PyMuPDF==1.25.5",
+  "pdfplumber==0.11.6",
+  "python-docx==1.1.2",
+  "openpyxl==3.1.5",
+  "pillow==11.2.1",
+  "rapidocr-onnxruntime==1.4.4",
+  "opencv-python-headless==4.11.0.86",
+  "numpy==1.26.4",
+  # No lightgbm: it imports SciPy (~120 MB together). The challenger scores the same model.txt with the NumPy port in
+  # ai_engine/risk_model/challenger/treemodel.py, verified against LightGBM in tests/test_challenger.py.
+  "reportlab==4.4.0",
+  "anthropic==1.17.0",
+]
+
+[tool.uv]
+# RapidOCR depends on the GUI build of OpenCV (~170 MB with Qt/X11 libraries); the headless build provides the same
+# cv2 module for image processing at about 140 MB.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
+package = false
+
+[tool.vercel]
+entrypoint = "app.main:app"

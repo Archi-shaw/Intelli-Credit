@@ -13,7 +13,8 @@ const nextConfig = {
   experimental: { proxyTimeout: proxyTimeoutMs, middlewareClientMaxBodySize: `${proxyMaxBodyMb}mb` },
   // A separate dist dir lets the E2E production build run alongside `next dev`.
   distDir: process.env.NEXT_DIST_DIR || ".next",
-  output: "standalone",
+  // Self-contained server for the Docker image; Vercel builds (VERCEL=1) use the platform's own Next.js output.
+  output: process.env.VERCEL ? undefined : "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
   // The browser only ever talks to this origin; API calls are proxied server-side so the session

@@ -303,6 +303,7 @@ intelli/
 │   ├── synthetic/          # synthetic demo documents (three borrower cases)
 │   └── ml/                 # synthetic labelled ML dataset + dataset card
 ├── deploy/compute-engine/  # Compute Engine VM: create-vm, bootstrap, env, deploy, nginx/TLS, verify, backups
+├── deploy/vercel/          # Vercel Hobby: database setup (migrations, app role, synthetic seed)
 ├── deploy/gcp/             # alternative Cloud Run / Cloud SQL deployment (prepared, not deployed)
 ├── docs/                   # DEPLOYMENT_COMPUTE_ENGINE, BUILD_STATUS, OPERATIONS, PROVIDERS, ML_CHALLENGER
 ├── scripts/                # backup.sh, restore.sh
@@ -477,7 +478,10 @@ All configuration is environment-driven and documented in [`.env.example`](.env.
 
 - `DATABASE_URL` must use the **non-superuser** app role so row-level security applies; `MIGRATION_DATABASE_URL` is
   the owner account used only for migrations.
-- `JOB_BACKEND`: `thread` (default), `celery` or `sync` (tests).
+- `JOB_BACKEND`: `thread` (default), `celery`, `sync` (tests) or `request` (serverless: jobs run inside authenticated
+  `POST /assessments/{id}/jobs/run-next` calls that the web app makes while work is queued).
+- `STORAGE_BACKEND` (`local` | `database`), `RATE_LIMIT_BACKEND` (`redis` | `postgres` | `memory`), `DB_POOL`
+  (`queue` | `null`), `OCR_THREADS`: hosting without a persistent disk or Redis (see the Vercel guide).
 - `RATE_LIMIT_*`, `TRUSTED_PROXIES`: distributed rate limiting (see [Security](#-security)).
 - `LLM_*`, `EMBEDDING_*`, `SEARCH_PROVIDER`, `TAVILY_API_KEY`, `BRAVE_API_KEY`, `SERPAPI_API_KEY`: optional providers —
   see [docs/PROVIDERS.md](docs/PROVIDERS.md).
@@ -525,6 +529,11 @@ outside production.
   Let's Encrypt, IAP-only SSH, daily disk snapshots and nightly application backups. Scripts in
   [`deploy/compute-engine/`](deploy/compute-engine/). **Rehearsed locally (production overlay behind nginx/TLS, all
   verification scripts passing); not yet deployed to a Google Cloud project — no public URL.**
+- **Vercel Hobby (portfolio demo, no worker, no Redis)** — [docs/DEPLOYMENT_VERCEL.md](docs/DEPLOYMENT_VERCEL.md):
+  Next.js and the FastAPI API as two Vercel projects plus a free Neon PostgreSQL database. Processing is
+  request-driven (`JOB_BACKEND=request`), with documents, rate limits and login lockout stored in PostgreSQL. The
+  same extraction, OCR, reconciliation, scoring and CAM code runs, profiled at 1 vCPU / 2 GB, with Hobby's limits
+  documented (uploads ≤ 4 MB; very long scanned PDFs exceed the request time limits).
 - **Google Cloud managed alternative** — [deploy/gcp/README.md](deploy/gcp/README.md): Cloud Run (public web,
   internal API, worker), Cloud SQL on a private IP, Memorystore, a private bucket and Secret Manager. **Prepared and
   dry-run only — not deployed.** `deploy/gcp/deploy.sh` prints its plan unless `DRY_RUN=0` is set.

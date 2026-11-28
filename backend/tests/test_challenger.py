@@ -137,3 +137,67 @@ def test_missing_artifact_degrades_gracefully(org_a, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "CHALLENGER_MODEL_DIR", str(tmp_path / "none"))
     out = challenger.score(None, 0, {}, None, [], set())
     assert out["status"] == "unavailable" and "ml-train" in out["detail"]
+
+
+def _feature_matrix(booster, n: int = 400, seed: int = 7) -> np.ndarray:
+    """Random rows across each feature's training range, with missing values, zeros and exact split thresholds."""
+    rng = np.random.default_rng(seed)
+    import re
+    from pathlib import Path
+
+    from app.core.config import settings
+
+    text = (Path(settings.CHALLENGER_MODEL_DIR) / (Path(settings.CHALLENGER_MODEL_DIR) / "LATEST").read_text().strip()
+            / "model.txt").read_text()
+    ranges = [tuple(map(float, r.split(":"))) for r in re.search(r"feature_infos=(.*)", text).group(1).replace("[", "")
+              .replace("]", "").split()]
+    X = np.array([[rng.uniform(lo - 0.1 * (hi - lo), hi + 0.1 * (hi - lo)) for lo, hi in ranges] for _ in range(n)])
+    X[rng.random(X.shape) < 0.15] = np.nan
+    X[rng.random(X.shape) < 0.03] = 0.0
+    thresholds = [(t.split_feature[i], t.threshold[i]) for t in booster.trees for i in range(len(t.split_feature))]
+    for row in range(0, n, 4):  # exact thresholds exercise the `<=` boundary
+        f, thr = thresholds[row % len(thresholds)]
+        X[row, f] = thr
+    return X
+
+
+def test_numpy_scorer_matches_lightgbm_scores_and_treeshap():
+    """The serverless scorer (no LightGBM/SciPy) must reproduce LightGBM exactly on the shipped artifact."""
+    lgb = pytest.importorskip("lightgbm")
+    from pathlib import Path
+
+    from ai_engine.risk_model.challenger.treemodel import TextModelBooster
+    from app.core.config import settings
+
+    root = Path(settings.CHALLENGER_MODEL_DIR)
+    model = root / (root / "LATEST").read_text().strip() / "model.txt"
+    ours, ref = TextModelBooster(model), lgb.Booster(model_file=str(model))
+    assert ours.feature_name() == ref.feature_name() == FEATURE_NAMES
+    X = _feature_matrix(ours)
+    np.testing.assert_allclose(ours.predict(X, raw_score=True), ref.predict(X, raw_score=True), rtol=0, atol=1e-10)
+    np.testing.assert_allclose(ours.predict(X, pred_contrib=True), ref.predict(X, pred_contrib=True), rtol=0, atol=1e-10)
+    np.testing.assert_allclose(ours.predict(X), ref.predict(X), rtol=0, atol=1e-12)
+
+
+def test_challenger_uses_numpy_scorer_without_lightgbm(monkeypatch):
+    import builtins
+    from pathlib import Path
+
+    from app.core.config import settings
+
+    real_import = builtins.__import__
+
+    def no_lightgbm(name, *a, **kw):
+        if name == "lightgbm" or name.startswith("lightgbm."):
+            raise ImportError("lightgbm not installed")
+        return real_import(name, *a, **kw)
+
+    root = Path(settings.CHALLENGER_MODEL_DIR)
+    art = root / (root / "LATEST").read_text().strip()
+    features = {n: v for n, v in zip(FEATURE_NAMES, [8.5, 9.1, 12.0, 6.0, 1.2, 0, 0.4, 1.4, 3.1, 8.0, 0.3, 10.0,
+                                                     60.0, math.nan, 0, 1])}
+    with_lgb = ChallengerModel(art).predict(features)
+    monkeypatch.setattr(builtins, "__import__", no_lightgbm)
+    slim = ChallengerModel(art)
+    assert slim.engine == "treemodel"
+    assert slim.predict(features) == with_lgb  # identical output, including rounded SHAP contributions

@@ -19,14 +19,22 @@ class ArtifactError(Exception):
 
 class ChallengerModel:
     def __init__(self, model_dir: str | Path):
-        import lightgbm as lgb
-
         self.dir = Path(model_dir)
+        try:
+            import lightgbm as lgb
+
+            load, errors = (lambda f: lgb.Booster(model_file=f)), (OSError, ValueError, lgb.basic.LightGBMError)
+            self.engine = "lightgbm"
+        except ImportError:  # slim serverless bundles: same model file, scored by the NumPy port (treemodel.py)
+            from ai_engine.risk_model.challenger.treemodel import TextModelBooster
+
+            load, errors = TextModelBooster, (OSError, ValueError, KeyError)
+            self.engine = "treemodel"
         try:
             self.manifest = json.loads((self.dir / "manifest.json").read_text())
             self.calibrator = json.loads((self.dir / "calibrator.json").read_text())
-            self.booster = lgb.Booster(model_file=str(self.dir / "model.txt"))
-        except (OSError, ValueError, lgb.basic.LightGBMError) as exc:
+            self.booster = load(str(self.dir / "model.txt"))
+        except errors as exc:
             raise ArtifactError(f"Challenger artifact at {self.dir} is unreadable: {exc}") from exc
         names = [f["name"] for f in self.manifest.get("features", [])]
         if names != FEATURE_NAMES or self.booster.feature_name() != FEATURE_NAMES:

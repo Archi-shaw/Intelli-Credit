@@ -1,11 +1,10 @@
-"""CAM PDF renderer (ReportLab). Uses DejaVu Sans (bundled with matplotlib) so ₹ renders correctly."""
+"""CAM PDF renderer (ReportLab). Uses DejaVu Sans (bundled in reporting/fonts) so ₹ renders correctly."""
 from __future__ import annotations
 
 import io
 import os
 from xml.sax.saxutils import escape
 
-import matplotlib
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -17,7 +16,17 @@ from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemp
 
 from reporting.generators.common import LOAN_TYPES, SECTIONS, evidence_references, inr, label, lakh, missing_items, pct, ratio
 
-_FONT_DIR = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
+# DejaVu Sans renders ₹. Bundled in reporting/fonts (license alongside) so CAM rendering does not need matplotlib
+# at runtime; falls back to matplotlib's copy of the same files.
+_FONT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts")
+
+
+def _font_dir() -> str:
+    if os.path.isfile(os.path.join(_FONT_DIR, "DejaVuSans.ttf")):
+        return _FONT_DIR
+    import matplotlib
+
+    return os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
 _registered = False
 
 NAVY = colors.HexColor("#0f2a4a")
@@ -30,9 +39,10 @@ SEV = {"critical": "#9b1c1c", "high": "#b45309", "medium": "#a16207", "low": "#3
 def _fonts():
     global _registered
     if not _registered:
-        pdfmetrics.registerFont(TTFont("DejaVu", os.path.join(_FONT_DIR, "DejaVuSans.ttf")))
-        pdfmetrics.registerFont(TTFont("DejaVu-Bold", os.path.join(_FONT_DIR, "DejaVuSans-Bold.ttf")))
-        pdfmetrics.registerFont(TTFont("DejaVu-Oblique", os.path.join(_FONT_DIR, "DejaVuSans-Oblique.ttf")))
+        d = _font_dir()
+        pdfmetrics.registerFont(TTFont("DejaVu", os.path.join(d, "DejaVuSans.ttf")))
+        pdfmetrics.registerFont(TTFont("DejaVu-Bold", os.path.join(d, "DejaVuSans-Bold.ttf")))
+        pdfmetrics.registerFont(TTFont("DejaVu-Oblique", os.path.join(d, "DejaVuSans-Oblique.ttf")))
         from reportlab.pdfbase.pdfmetrics import registerFontFamily
 
         registerFontFamily("DejaVu", normal="DejaVu", bold="DejaVu-Bold", italic="DejaVu-Oblique", boldItalic="DejaVu-Bold")

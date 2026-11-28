@@ -6,6 +6,7 @@ the affected integration simply reports itself as "not configured".
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     LOG_FORMAT: Literal["json", "text"] = "json"
     # --- Rate limiting (see app/core/ratelimit.py) ---
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_BACKEND: Literal["redis", "memory"] = "redis"  # redis = shared across API instances
+    RATE_LIMIT_BACKEND: Literal["redis", "postgres", "memory"] = "redis"  # redis/postgres = shared across instances
     RATE_LIMIT_REDIS_URL: str = ""  # defaults to REDIS_URL
     RATE_LIMIT_KEY_PREFIX: str = "ic:rl"
     RATE_LIMIT_FAIL_MODE: Literal["local", "open", "closed"] = "local"  # behaviour while Redis is unreachable
@@ -55,6 +56,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 300  # legacy default for RATE_LIMIT_IP
     # Reverse proxies whose X-Forwarded-For header is trusted (the Next.js frontend proxies /api).
     TRUSTED_PROXIES: str = "127.0.0.1/32,::1/128"
+    # Header set (and overwritten) by the hosting platform with the client address, e.g. "x-real-ip" on Vercel.
+    # When set, it replaces X-Forwarded-For parsing. Never set this behind a proxy that passes the header through.
+    CLIENT_IP_HEADER: str = ""
     AUTH_RATE_LIMIT_PER_MINUTE: int = 20  # legacy default for RATE_LIMIT_AUTH
 
     # --- Database / cache ---
@@ -65,14 +69,20 @@ class Settings(BaseSettings):
     DB_APP_ROLE: str = "intellicredit_app"
     APP_DB_PASSWORD: str = ""  # used only by `python -m app.cli create-app-role`
     REDIS_URL: str = "redis://localhost:6380/0"
+    # "queue" = SQLAlchemy connection pool (long-running servers); "null" = one connection per session, without
+    # server-side prepared statements (serverless functions behind a transaction-mode pooler such as Neon's).
+    DB_POOL: Literal["queue", "null"] = "queue"
 
-    # --- Background jobs: "celery" (Redis worker), "thread" (in-process pool), "sync" (inline, tests) ---
-    JOB_BACKEND: Literal["celery", "thread", "sync"] = "thread"
+    # --- Background jobs: "celery" (Redis worker), "thread" (in-process pool), "sync" (inline, tests),
+    #     "request" (serverless: jobs stay queued in PostgreSQL until an authenticated request runs them) ---
+    JOB_BACKEND: Literal["celery", "thread", "sync", "request"] = "thread"
     JOB_MAX_ATTEMPTS: int = 3
     JOB_THREAD_WORKERS: int = 2
-    JOB_STALE_MINUTES: int = 30  # running jobs older than this are re-queued on startup
+    JOB_STALE_MINUTES: int = 30  # running jobs older than this are re-queued (and, with "request", re-claimable)
 
     # --- Storage ---
+    # "local" = files under STORAGE_DIR; "database" = bytes in PostgreSQL (serverless hosts with no persistent disk).
+    STORAGE_BACKEND: Literal["local", "database"] = "local"
     STORAGE_DIR: str = str(BACKEND_DIR / "storage")
     MAX_UPLOAD_MB: int = 25
 
@@ -101,6 +111,8 @@ class Settings(BaseSettings):
     # --- OCR ---
     OCR_PROVIDER: Literal["auto", "tesseract", "rapidocr", "none"] = "auto"
     OCR_LANG: str = "eng"
+    # Threads for OCR inference; 0 = derive from the container/function CPU quota. 1 on Vercel Hobby (1 vCPU).
+    OCR_THREADS: int = 0
 
     # --- Databricks (optional authorised dataset connector) ---
     DATABRICKS_HOST: str = ""
@@ -147,6 +159,13 @@ class Settings(BaseSettings):
                 problems.append("COOKIE_SECURE must be true in production (HTTPS only cookies).")
             if "intelli_dev_pw" in self.DATABASE_URL:
                 problems.append("DATABASE_URL still uses the development password.")
+        if os.environ.get("VERCEL"):  # set by the Vercel runtime: no persistent disk, no background threads
+            if self.STORAGE_BACKEND != "database":
+                problems.append("STORAGE_BACKEND must be 'database' on Vercel (the function filesystem is ephemeral).")
+            if self.JOB_BACKEND != "request":
+                problems.append("JOB_BACKEND must be 'request' on Vercel (work outside a request can be frozen or lost).")
+            if self.RATE_LIMIT_BACKEND == "redis" and not (self.RATE_LIMIT_REDIS_URL or "localhost" not in self.REDIS_URL):
+                problems.append("RATE_LIMIT_BACKEND must be 'postgres' on Vercel unless a Redis URL is configured.")
         return problems
 
     @property

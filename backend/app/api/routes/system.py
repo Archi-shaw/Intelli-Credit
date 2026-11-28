@@ -53,13 +53,12 @@ def readiness() -> tuple[bool, dict]:
     from app.core import storage
 
     try:
-        root = storage.storage_root()
-        probe = root / ".ready"
-        probe.write_text("ok")
-        probe.unlink()
+        storage.check()
         checks["storage"] = "ok"
     except OSError as exc:
         checks["storage"] = f"error: {exc.strerror}"
+    except Exception as exc:  # noqa: BLE001 - database-backed storage (table missing, connection error)
+        checks["storage"] = f"error: {type(exc).__name__}"
     ok = all(v == "ok" or k == "migrations" and v not in ("not_applied", "missing") for k, v in checks.items())
     return ok, checks
 

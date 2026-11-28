@@ -36,6 +36,12 @@ def _is_trusted(ip: str) -> bool:
 
 
 def client_ip(request: Request) -> str | None:
+    if settings.CLIENT_IP_HEADER:  # platform-set header (e.g. Vercel's x-real-ip); the platform overwrites it
+        value = request.headers.get(settings.CLIENT_IP_HEADER, "").split(",")[0].strip()
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            pass
     peer = request.client.host if request.client else None
     if not peer or not _is_trusted(peer):
         return peer

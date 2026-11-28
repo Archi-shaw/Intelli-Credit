@@ -46,7 +46,8 @@ async def lifespan(app: FastAPI):
     from app.services import handlers  # noqa: F401  (register job handlers)
     from app.services.jobs import recover_jobs, shutdown
 
-    storage.storage_root()
+    if settings.STORAGE_BACKEND == "local":
+        storage.storage_root()
     from app.core.ratelimit import limiter
 
     limiter.configure()
@@ -66,6 +67,10 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # Also checked here, not only in the lifespan hook: some serverless runtimes never run ASGI startup events.
+    problems = settings.production_problems()
+    if problems:
+        raise RuntimeError("Refusing to start with insecure production settings: " + " ".join(problems))
     app = FastAPI(title="Intelli-Credit API", version=system.VERSION, lifespan=lifespan,
                   description="AI-assisted MSME credit assessment — decision support, subject to human review.",
                   docs_url="/api/docs" if settings.ENVIRONMENT != "production" else None,

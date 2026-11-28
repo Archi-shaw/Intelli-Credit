@@ -215,3 +215,29 @@ def get_job(job_id: int, current: CurrentUser = Depends(require_any), db: Sessio
     if not j or j.organization_id != current.org_id:
         raise NotFoundError("Job not found.")
     return S.job(j)
+
+
+@router.post("/assessments/{application_id}/jobs/run-next")
+def run_next_job(application_id: int, current: CurrentUser = Depends(require_any), db: Session = Depends(get_db)):
+    """Serverless processing (JOB_BACKEND=request): run the application's oldest queued job inside this request.
+
+    The web app calls this while it shows queued or processing work and polls the usual status endpoints.
+    Organisation-scoped (other organisations get 404) and idempotent: a job is claimed atomically, so concurrent
+    calls never run it twice. With worker backends (celery, thread) it only reports the pending count.
+    """
+    a = get_application_for_org(db, application_id, current)
+    out = jobs.run_next_for_application(db, a.id, current.org_id)
+    return {"mode": out["mode"], "pending": out["pending"], "ran": S.job(out["ran"]) if out["ran"] else None}
+
+
+@router.post("/jobs/{job_id}/run")
+def run_job_request(job_id: int, current: CurrentUser = Depends(require_any), db: Session = Depends(get_db)):
+    """Serverless processing: run one attempt of a specific job now (no-op if it already ran or is running)."""
+    j = db.get(ProcessingJob, job_id)
+    if not j or j.organization_id != current.org_id:
+        raise NotFoundError("Job not found.")
+    if settings.JOB_BACKEND == "request":
+        jobs.run_job_now(j.id)
+        db.expire_all()
+        j = db.get(ProcessingJob, job_id)
+    return {"mode": settings.JOB_BACKEND, "job": S.job(j)}

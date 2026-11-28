@@ -6,6 +6,10 @@ visible through the API regardless of which backend executes it:
 * ``celery`` — a Redis-backed Celery worker (``app.workers.celery_app``) runs ``run_job``.
 * ``thread`` — an in-process thread pool (default for local development).
 * ``sync``   — executed inline after commit (tests).
+* ``request`` — serverless hosts (Vercel): nothing runs outside a request. Jobs stay ``queued`` in PostgreSQL until
+  an authenticated, organisation-scoped API call (``POST /assessments/{id}/jobs/run-next`` or ``/jobs/{id}/run``)
+  claims one and executes a single attempt inside that request. The web app calls it while it shows queued work,
+  so processing needs no worker, no broker and no fire-and-forget threads that a frozen function would lose.
 
 Handlers must be idempotent: a retried or recovered job re-derives its outputs from scratch.
 """
@@ -18,7 +22,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -70,6 +74,8 @@ def create_job(db: Session, *, job_type: str, organization_id: int, application_
 def dispatch(job_id: int) -> None:
     """Hand a committed job to the configured backend."""
     backend = settings.JOB_BACKEND
+    if backend == "request":
+        return  # stays queued; run by run_next_for_application / run_job_now inside an authenticated request
     if backend == "sync":
         run_job(job_id)
     elif backend == "celery":
@@ -84,11 +90,24 @@ def dispatch(job_id: int) -> None:
         _pool().submit(run_job, job_id)
 
 
-def run_job(job_id: int) -> None:
-    """Execute a job with retries. Safe to call more than once for the same job."""
+def _claimable(job_id: int):
+    """Queued/retrying jobs with attempts left, or 'running' jobs whose runner vanished (stale)."""
+    stale_before = utcnow() - timedelta(minutes=settings.JOB_STALE_MINUTES)
+    return and_(ProcessingJob.id == job_id, ProcessingJob.attempts < settings.JOB_MAX_ATTEMPTS, or_(
+        ProcessingJob.status.in_(("queued", "retrying")),
+        and_(ProcessingJob.status == "running", ProcessingJob.started_at < stale_before)))
+
+
+def run_job(job_id: int, *, max_attempts: int | None = None) -> None:
+    """Execute a job with retries. Safe to call more than once for the same job.
+
+    ``max_attempts`` limits the attempts made by this call (the request backend makes one per request and leaves
+    the job ``retrying`` for the next request, so a single HTTP call never sleeps through back-offs).
+    """
     from app.services import handlers  # noqa: F401  (registers handlers)
 
-    for attempt in range(settings.JOB_MAX_ATTEMPTS):
+    attempts_this_call = max_attempts or settings.JOB_MAX_ATTEMPTS
+    for attempt in range(attempts_this_call):
         db = SessionLocal()
         db.info["rls_bypass"] = True
         try:
@@ -99,8 +118,7 @@ def run_job(job_id: int) -> None:
             # Atomic claim: only one worker may move a job from queued/retrying to running.
             claimed = db.execute(
                 update(ProcessingJob)
-                .where(ProcessingJob.id == job_id, ProcessingJob.status.in_(("queued", "retrying")),
-                       ProcessingJob.attempts < settings.JOB_MAX_ATTEMPTS)
+                .where(_claimable(job_id))
                 .values(status="running", attempts=ProcessingJob.attempts + 1, started_at=utcnow(), error=None,
                         message="Running")
             ).rowcount
@@ -124,14 +142,66 @@ def run_job(job_id: int) -> None:
             return
         except Exception as exc:  # noqa: BLE001 - every failure must be recorded on the job row
             db.rollback()
-            final = attempt + 1 >= settings.JOB_MAX_ATTEMPTS
-            log.exception("job attempt failed", extra={"ctx": {"job_id": job_id, "attempt": attempt + 1}})
+            used = db.scalar(select(ProcessingJob.attempts).where(ProcessingJob.id == job_id)) or attempt + 1
+            final = used >= settings.JOB_MAX_ATTEMPTS
+            log.exception("job attempt failed", extra={"ctx": {"job_id": job_id, "attempt": used}})
             _mark_failed(job_id, f"{type(exc).__name__}: {exc}"[:2000], final=final)
-            if final:
+            if final or attempt + 1 >= attempts_this_call:
                 return
             time.sleep(min(2 ** attempt, 8) if settings.JOB_BACKEND != "sync" else 0)
         finally:
             db.close()
+
+
+RUNNABLE = ("queued", "retrying")
+
+
+def _pending_query(application_id: int, organization_id: int):
+    stale_before = utcnow() - timedelta(minutes=settings.JOB_STALE_MINUTES)
+    return (select(ProcessingJob.id).where(
+        ProcessingJob.application_id == application_id, ProcessingJob.organization_id == organization_id,
+        ProcessingJob.attempts < settings.JOB_MAX_ATTEMPTS,
+        or_(ProcessingJob.status.in_(RUNNABLE),
+            and_(ProcessingJob.status == "running", ProcessingJob.started_at < stale_before))))
+
+
+def _count_active(db: Session, application_id: int, organization_id: int) -> tuple[int, int]:
+    """(runnable now, currently running) for one application."""
+    runnable = db.scalar(select(func.count()).select_from(_pending_query(application_id, organization_id).subquery()))
+    running = db.scalar(select(func.count(ProcessingJob.id)).where(
+        ProcessingJob.application_id == application_id, ProcessingJob.organization_id == organization_id,
+        ProcessingJob.status == "running"))
+    return int(runnable or 0), int(running or 0)
+
+
+def run_job_now(job_id: int) -> None:
+    """Request backend: one attempt of one job, inside the calling request. Idempotent (atomic claim)."""
+    run_job(job_id, max_attempts=1)
+
+
+def run_next_for_application(db: Session, application_id: int, organization_id: int) -> dict:
+    """Request backend: claim and run the oldest runnable job of an application (organisation-scoped).
+
+    ``db`` is the caller's tenant-scoped session; it is only used to find the job. Returns what was run and how
+    much work remains, so the client knows whether to call again. Other backends never run anything here.
+    """
+    if settings.JOB_BACKEND != "request":
+        runnable, running = _count_active(db, application_id, organization_id)
+        return {"mode": settings.JOB_BACKEND, "ran": None, "pending": runnable + running}
+    ran = None
+    for _ in range(5):  # another request may claim the candidate first; try the next one
+        job_id = db.scalar(_pending_query(application_id, organization_id).order_by(ProcessingJob.id).limit(1))
+        if job_id is None:
+            break
+        run_job_now(job_id)
+        db.expire_all()
+        job = db.get(ProcessingJob, job_id)
+        if job is not None and job.status != "queued":
+            ran = job
+            break
+    db.expire_all()
+    runnable, running = _count_active(db, application_id, organization_id)
+    return {"mode": "request", "ran": ran, "pending": runnable + running}
 
 
 def _mark_failed(job_id: int, error: str, *, final: bool) -> None:

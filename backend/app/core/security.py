@@ -92,8 +92,47 @@ class LoginThrottle:
         self._failures[key] = recent
         return recent
 
+    # -- PostgreSQL store (RATE_LIMIT_BACKEND=postgres, e.g. serverless hosts without Redis) -----------------
+    def _pg(self, key: str, op):
+        if settings.RATE_LIMIT_BACKEND != "postgres" or time.time() < self._redis_down_until:
+            return None
+        try:
+            from app.core.database import engine
+
+            with engine.begin() as conn:
+                return op(conn, hashlib.sha256(key.encode()).hexdigest())
+        except Exception:  # noqa: BLE001 - fall back to local tracking if the database store fails
+            self._redis_down_until = time.time() + settings.RATE_LIMIT_BREAKER_SECONDS
+            return None
+
+    def _pg_count(self, key: str) -> int | None:
+        from sqlalchemy import text
+
+        return self._pg(key, lambda c, h: int(c.execute(text(
+            "SELECT count(*) FROM login_failures WHERE key = :k AND failed_at > now() - make_interval(secs => :w)"),
+            {"k": h, "w": self.window}).scalar()))
+
+    def _pg_record(self, key: str) -> bool | None:
+        from sqlalchemy import text
+
+        def op(c, h):
+            c.execute(text("INSERT INTO login_failures (key, failed_at) VALUES (:k, now())"), {"k": h})
+            c.execute(text("DELETE FROM login_failures WHERE failed_at < now() - make_interval(secs => :w)"),
+                      {"w": self.window})
+            return True
+        return self._pg(key, op)
+
+    def _pg_reset(self, key: str) -> None:
+        from sqlalchemy import text
+
+        self._pg(key, lambda c, h: c.execute(text("DELETE FROM login_failures WHERE key = :k"), {"k": h}))
+
     def is_locked(self, key: str) -> bool:
         now = time.time()
+        if settings.RATE_LIMIT_BACKEND == "postgres":
+            count = self._pg_count(key)
+            if count is not None:
+                return count >= self.max_failures
 
         def op(r):
             k = self._rkey(key)
@@ -119,12 +158,16 @@ class LoginThrottle:
             pipe.execute()
             return True
 
-        if self._shared(op) is None:
+        stored = self._pg_record(key) if settings.RATE_LIMIT_BACKEND == "postgres" else self._shared(op)
+        if stored is None:
             with self._lock:
                 self._prune(key, now).append(now)
 
     def reset(self, key: str) -> None:
-        self._shared(lambda r: r.delete(self._rkey(key)))
+        if settings.RATE_LIMIT_BACKEND == "postgres":
+            self._pg_reset(key)
+        else:
+            self._shared(lambda r: r.delete(self._rkey(key)))
         with self._lock:
             self._failures.pop(key, None)
 

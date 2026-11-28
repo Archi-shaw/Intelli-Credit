@@ -10,10 +10,13 @@ import { Dialog } from "@/components/ui/overlay";
 import { Badge, Button, Callout, Card, CardHeader, EmptyState, ErrorState, LoadingBlock, Progress, Select, Table, Td, Th } from "@/components/ui/primitives";
 import { api, errorMessage, fileUrl } from "@/lib/api";
 import { bytes, date, DOC_CATEGORIES, inr, label } from "@/lib/format";
+import { useJobRunner } from "@/lib/jobs";
 import { useCan } from "@/lib/session";
 import type { Doc, Metric } from "@/lib/types";
 
 const ACCEPT = ".pdf,.docx,.xlsx,.csv,.png,.jpg,.jpeg";
+// Must match the API's MAX_UPLOAD_MB (set at build time; 4 on Vercel, whose functions accept at most 4.5 MB bodies).
+const MAX_UPLOAD_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB || 25);
 
 export function useDocuments(appId: number) {
   return useQuery({
@@ -32,6 +35,10 @@ function UploadPanel({ appId, closed }: { appId: number; closed: boolean }) {
 
   const send = async (files: FileList | File[]) => {
     for (const f of Array.from(files)) {
+      if (f.size > MAX_UPLOAD_MB * 1024 * 1024) {
+        toast.error(`${f.name}: larger than the ${MAX_UPLOAD_MB} MB upload limit.`);
+        continue;
+      }
       setBusy((b) => [...b, f.name]);
       const form = new FormData();
       form.append("file", f);
@@ -52,7 +59,7 @@ function UploadPanel({ appId, closed }: { appId: number; closed: boolean }) {
   if (closed) return <Callout>This assessment is closed. Documents can no longer be added.</Callout>;
   return (
     <Card>
-      <CardHeader title="Upload financial documents" description="PDF, DOCX, XLSX, CSV, JPG or PNG up to 25 MB. File contents are verified against the extension; scanned pages are OCR'd." />
+      <CardHeader title="Upload financial documents" description={`PDF, DOCX, XLSX, CSV, JPG or PNG up to ${MAX_UPLOAD_MB} MB. File contents are verified against the extension; scanned pages are OCR'd.`} />
       <div className="space-y-3 p-5">
         <div className="flex flex-wrap items-center gap-3">
           <label htmlFor="doc-category" className="text-sm font-medium">Document type</label>
@@ -138,6 +145,8 @@ function DocumentDetail({ doc, onClose }: { doc: Doc; onClose: () => void }) {
 export function DocumentsTab({ appId, closed }: { appId: number; closed: boolean }) {
   const qc = useQueryClient();
   const docs = useDocuments(appId);
+  useJobRunner(appId, !!docs.data?.items.some((d) => ["queued", "processing"].includes(d.processing_status)),
+    docs.dataUpdatedAt, [["docs", appId], ["assessment", appId]]);
   const canWrite = useCan("documents:write");
   const [detail, setDetail] = useState<Doc | null>(null);
   const start = useMutation({

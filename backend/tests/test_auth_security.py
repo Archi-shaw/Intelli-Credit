@@ -163,7 +163,7 @@ def test_health_and_readiness(client):
     assert client.get("/api/v1/health").status_code == 200
     r = client.get("/ready")
     assert r.status_code == 200, r.text
-    assert r.json()["checks"]["database"] == "ok" and r.json()["checks"]["migrations"] == "0002"
+    assert r.json()["checks"]["database"] == "ok" and r.json()["checks"]["migrations"] == "0003"
 
 
 def test_production_settings_guard():

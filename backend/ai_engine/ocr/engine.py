@@ -65,13 +65,45 @@ class TesseractEngine(OCREngine):
         return OCRResult(text=text, confidence=sum(confs) / len(confs) if confs else 0.0, engine=self.name)
 
 
+def cpu_budget() -> int:
+    """CPUs this process may actually use: OCR_THREADS if set, else the cgroup CPU quota (containers, serverless
+    functions), else the CPU affinity. ONNX Runtime would otherwise size its pool from the host's core count; under
+    a 1-CPU quota on a 12-core host that oversubscription made one OCR page take 90 s instead of 12 s."""
+    import os
+
+    try:
+        from app.core.config import settings
+
+        if getattr(settings, "OCR_THREADS", 0):
+            return max(1, int(settings.OCR_THREADS))
+    except Exception:  # noqa: BLE001 - ai_engine is also used without the app package
+        pass
+    try:
+        quota, period = open("/sys/fs/cgroup/cpu.max").read().split()[:2]
+        if quota != "max":
+            return max(1, int(int(quota) / int(period)))
+    except (OSError, ValueError):
+        pass
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
 class RapidOCREngine(OCREngine):
     name = "rapidocr"
 
     def __init__(self):
         from rapidocr_onnxruntime import RapidOCR
 
-        self._engine = RapidOCR()
+        threads = cpu_budget()
+        try:
+            import cv2
+
+            cv2.setNumThreads(threads)
+        except Exception:  # noqa: BLE001 - OpenCV threading is an optimisation only
+            pass
+        self._engine = RapidOCR(intra_op_num_threads=threads, inter_op_num_threads=1)
         self._lock = threading.Lock()
 
     @staticmethod

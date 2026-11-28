@@ -81,7 +81,8 @@ class ReviewComment(Base, TimestampMixin):
 
 class ProcessingJob(Base, TimestampMixin):
     __tablename__ = "processing_jobs"
-    __table_args__ = (Index("ix_job_application_type", "application_id", "job_type"),)
+    __table_args__ = (Index("ix_job_application_type", "application_id", "job_type"),
+                      Index("ix_processing_jobs_application_id_status", "application_id", "status"))
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)

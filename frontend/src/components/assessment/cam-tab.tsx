@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Badge, Button, Callout, Card, CardBody, CardHeader, EmptyState, LoadingBlock, statusTone, Table, Td, Th } from "@/components/ui/primitives";
 import { api, errorMessage, fileUrl } from "@/lib/api";
 import { date, inr, label } from "@/lib/format";
+import { useJobRunner } from "@/lib/jobs";
 import type { CamReport } from "@/lib/types";
 
 export function CamTab({ appId, hasAssessment }: { appId: number; hasAssessment: boolean }) {
@@ -17,6 +18,7 @@ export function CamTab({ appId, hasAssessment }: { appId: number; hasAssessment:
     queryKey: ["cam", appId], queryFn: () => api.get<{ items: CamReport[] }>(`/assessments/${appId}/cam`),
     refetchInterval: (q) => (q.state.data?.items.some((r) => r.status === "generating") ? 1500 : false),
   });
+  useJobRunner(appId, !!hist.data?.items.some((r) => r.status === "generating"), hist.dataUpdatedAt, [["cam", appId]]);
   const current = selected ?? hist.data?.items.find((r) => r.status === "completed")?.id ?? null;
   const currentReport = hist.data?.items.find((r) => r.id === current);
   const ready = currentReport?.status === "completed";

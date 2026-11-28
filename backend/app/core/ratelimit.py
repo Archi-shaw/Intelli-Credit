@@ -163,6 +163,86 @@ class RedisBackend:
         await self._client.aclose()
 
 
+# ---------------------------------------------------------------------------------------------- PostgreSQL backend
+
+class PostgresBackend:
+    """Token buckets in PostgreSQL (``rate_limit_buckets``) for hosts without Redis, e.g. Vercel functions.
+
+    Same semantics as the Redis script: one transaction locks every bucket of the request (rows locked in key order,
+    so concurrent requests cannot deadlock), refills them from database time, and consumes only if all of them have
+    a token. Instances need no clock agreement. Expired rows are pruned occasionally.
+    """
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    async def check(self, buckets: list[Bucket], cost: int = 1) -> Decision:
+        import anyio
+
+        return await anyio.to_thread.run_sync(self.check_sync, buckets, cost)
+
+    def check_sync(self, buckets: list[Bucket], cost: int = 1) -> Decision:
+        from sqlalchemy import text
+
+        from app.core.database import engine
+
+        keys = sorted({b.key for b in buckets})
+        by_key = {b.key: b for b in buckets}
+        self._calls += 1
+        with engine.begin() as conn:
+            conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+            conn.execute(text(
+                "INSERT INTO rate_limit_buckets (key, tokens, updated_at, expires_at) "
+                "SELECT k, c, now(), now() + make_interval(secs => t) "
+                "FROM unnest(CAST(:keys AS text[]), CAST(:caps AS float8[]), CAST(:ttls AS float8[])) AS u(k, c, t) "
+                "ON CONFLICT (key) DO NOTHING"),
+                {"keys": keys, "caps": [float(by_key[k].limit.capacity) for k in keys],
+                 "ttls": [float(by_key[k].limit.period_s * 2) for k in keys]})
+            rows = conn.execute(text(
+                "SELECT key, tokens, GREATEST(0, EXTRACT(EPOCH FROM (now() - updated_at)) * 1000) AS elapsed_ms "
+                "FROM rate_limit_buckets WHERE key = ANY(CAST(:keys AS text[])) ORDER BY key FOR UPDATE"),
+                {"keys": keys}).all()
+            state = {r.key: min(float(by_key[r.key].limit.capacity), r.tokens + float(r.elapsed_ms) * by_key[r.key].limit.per_ms)
+                     for r in rows}
+            retry_ms, deny = 0.0, None
+            for k in keys:
+                b, tk = by_key[k], state[k]
+                if tk < cost:
+                    wait = (cost - tk) / b.limit.per_ms
+                    if wait > retry_ms:
+                        retry_ms, deny = wait, b
+            allowed = deny is None
+            rem, ref = None, by_key[keys[0]]
+            for k in keys:
+                tk = state[k] - cost if allowed else state[k]
+                state[k] = tk
+                if rem is None or math.floor(tk) < rem:
+                    rem, ref = math.floor(tk), by_key[k]
+            conn.execute(text(
+                "UPDATE rate_limit_buckets AS r SET tokens = u.t, updated_at = now(), "
+                "expires_at = now() + make_interval(secs => u.ttl) "
+                "FROM unnest(CAST(:keys AS text[]), CAST(:tokens AS float8[]), CAST(:ttls AS float8[])) AS u(k, t, ttl) "
+                "WHERE r.key = u.k"),
+                {"keys": keys, "tokens": [float(state[k]) for k in keys],
+                 "ttls": [float(by_key[k].limit.period_s * 2) for k in keys]})
+            if self._calls % 200 == 0:
+                conn.execute(text("DELETE FROM rate_limit_buckets WHERE expires_at < now()"))
+        ref = deny or ref
+        return Decision(allowed, max(1, math.ceil(retry_ms / 1000)) if not allowed else 0, ref.limit.capacity,
+                        max(0, int(rem or 0)), ref.scope)
+
+    async def delete_prefix(self, prefix: str) -> None:
+        from sqlalchemy import text
+
+        from app.core.database import engine
+
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM rate_limit_buckets WHERE key LIKE :p"), {"p": prefix.replace("%", r"\%") + "%"})
+
+    async def close(self) -> None:
+        return None
+
+
 # ---------------------------------------------------------------------------------------------- local backend
 
 class LocalBackend:
@@ -214,7 +294,7 @@ EXEMPT_PATHS = {"/api/v1/health", "/api/v1/ready"}
 AI_RE = re.compile(r"^/api/v1/(assessments/\d+/(chat|research)|system/integrations/[a-z_-]+/test)$")
 PROCESSING_RE = re.compile(
     r"^/api/v1/(assessments/\d+/(documents|reconciliation|risk-assessment|recommendation|cam|start|ratios|financials/extract)"
-    r"|documents/\d+/reprocess)$")
+    r"|assessments/\d+/jobs/run-next|documents/\d+/reprocess|jobs/\d+/run)$")
 
 
 def _identity(request: Request) -> tuple[str | None, str | None]:
@@ -235,7 +315,7 @@ def _identity(request: Request) -> tuple[str | None, str | None]:
 class RateLimiter:
     def __init__(self) -> None:
         self.local = LocalBackend()
-        self.redis: RedisBackend | None = None
+        self.redis: RedisBackend | PostgresBackend | None = None
         self._breaker_until = 0.0
         self._last_warning = 0.0
         self.limits = self._load_limits()
@@ -257,6 +337,8 @@ class RateLimiter:
         if settings.RATE_LIMIT_BACKEND == "redis" and self.redis is None:
             self.redis = RedisBackend(settings.RATE_LIMIT_REDIS_URL or settings.REDIS_URL,
                                       timeout_s=settings.RATE_LIMIT_REDIS_TIMEOUT_MS / 1000)
+        elif settings.RATE_LIMIT_BACKEND == "postgres" and self.redis is None:
+            self.redis = PostgresBackend()  # same shared-store slot: failures fall back per RATE_LIMIT_FAIL_MODE
 
     async def aclose(self) -> None:
         if self.redis is not None:
@@ -285,6 +367,8 @@ class RateLimiter:
         return buckets
 
     async def check(self, buckets: list[Bucket]) -> Decision | None:
+        if self.redis is None and settings.RATE_LIMIT_BACKEND in ("redis", "postgres"):
+            self.configure()  # serverless platforms may not run the ASGI lifespan startup hook
         if self.redis is not None and time.monotonic() >= self._breaker_until:
             try:
                 return await self.redis.check(buckets)

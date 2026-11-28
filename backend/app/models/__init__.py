@@ -26,3 +26,4 @@ from app.models.risk import (  # noqa: F401
     ScoringPolicy,
 )
 from app.models.misc import AuditLog, CAMReport, ChatMessage, ChatSession, Notification  # noqa: F401
+from app.models.platform import LoginFailure, RateLimitBucket, StoredFile  # noqa: F401

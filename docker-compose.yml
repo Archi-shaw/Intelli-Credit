@@ -34,6 +34,7 @@ x-backend-env: &backend-env
   SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
   # Keep any reverse proxy's request-body limit slightly above this (nginx: client_max_body_size).
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+  OCR_THREADS: ${OCR_THREADS:-0}
   DEMO_PASSWORD: ${DEMO_PASSWORD:-}
 
 services:

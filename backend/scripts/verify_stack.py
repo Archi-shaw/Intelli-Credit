@@ -62,12 +62,20 @@ def main() -> int:
         check(r.status_code == 201, f"upload {f.name}")
     bogus = a.post(f"/assessments/{appl['id']}/documents", files={"file": ("fake.pdf", b"not a pdf")}, data={"category": "auto"})
     check(bogus.status_code == 422, "invalid file rejected")
+    def drive_jobs() -> None:
+        # Serverless deployments (JOB_BACKEND=request) only process inside requests, as the web app drives them;
+        # with a worker backend this returns at once without running anything.
+        r = a.post(f"/assessments/{appl['id']}/jobs/run-next", timeout=300)
+        if r.status_code == 200 and r.json().get("mode") == "request" and r.json().get("pending"):
+            return
+        time.sleep(1)
+
     t = time.time()
     while time.time() - t < args.timeout:
         docs = a.get(f"/assessments/{appl['id']}/documents").json()["items"]
         if docs and all(d["processing_status"] in ("completed", "failed") for d in docs):
             break
-        time.sleep(1)
+        drive_jobs()
     check(all(d["processing_status"] == "completed" for d in docs), f"background processing ({time.time() - t:.1f}s): "
           + ", ".join(f"{d['category']}={d['processing_status']}" for d in docs))
     items = a.post(f"/assessments/{appl['id']}/reconciliation").json()["items"]
@@ -85,7 +93,7 @@ def main() -> int:
         cam = a.get(f"/cam/{cam['id']}").json()
         if cam["status"] in ("completed", "failed"):
             break
-        time.sleep(1)
+        drive_jobs()
     check(cam["status"] == "completed", f"CAM generation ({time.time() - t:.1f}s) {cam.get('error') or ''}")
     pdf, docx = a.get(f"/cam/{cam['id']}/pdf"), a.get(f"/cam/{cam['id']}/docx")
     check(pdf.status_code == 200 and pdf.content[:4] == b"%PDF", f"CAM PDF download ({len(pdf.content)} bytes)")

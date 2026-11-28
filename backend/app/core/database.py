@@ -79,6 +79,13 @@ def _make_engine(url: str):
             from sqlalchemy.pool import StaticPool
 
             kwargs["poolclass"] = StaticPool
+    elif settings.DB_POOL == "null":
+        # Serverless: each function instance may be frozen between requests, so hold no idle connections, and
+        # disable psycopg's automatic server-side prepared statements (incompatible with transaction-mode poolers).
+        from sqlalchemy.pool import NullPool
+
+        kwargs["poolclass"] = NullPool
+        kwargs["connect_args"] = {"prepare_threshold": None}
     else:
         kwargs.update(pool_size=10, max_overflow=20)
     eng = create_engine(url, **kwargs)

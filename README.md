@@ -214,7 +214,7 @@ sequenceDiagram
 | Reporting | ReportLab (PDF), python-docx (DOCX) |
 | Security | bcrypt, PyJWT, PostgreSQL RLS, Redis token-bucket rate limiting |
 | Testing | pytest, Vitest + Testing Library, Playwright |
-| Infrastructure | Docker, Docker Compose, Google Cloud deployment scripts (Cloud Run, Cloud SQL, Memorystore, Cloud Storage, Secret Manager) |
+| Infrastructure | Docker, Docker Compose, nginx + Let's Encrypt on Google Compute Engine (primary target), alternative Cloud Run / Cloud SQL / Memorystore scripts |
 | Observability | Structured JSON logs with request ids (Cloud Logging / Error Reporting compatible), `/health` and `/ready` endpoints |
 
 ## 🤖 Machine learning challenger
@@ -302,8 +302,9 @@ intelli/
 ├── data/
 │   ├── synthetic/          # synthetic demo documents (three borrower cases)
 │   └── ml/                 # synthetic labelled ML dataset + dataset card
-├── deploy/gcp/             # Google Cloud deployment (prepared, not deployed)
-├── docs/                   # BUILD_STATUS, OPERATIONS, PROVIDERS, ML_CHALLENGER
+├── deploy/compute-engine/  # Compute Engine VM: create-vm, bootstrap, env, deploy, nginx/TLS, verify, backups
+├── deploy/gcp/             # alternative Cloud Run / Cloud SQL deployment (prepared, not deployed)
+├── docs/                   # DEPLOYMENT_COMPUTE_ENGINE, BUILD_STATUS, OPERATIONS, PROVIDERS, ML_CHALLENGER
 ├── scripts/                # backup.sh, restore.sh
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
@@ -348,12 +349,16 @@ before the API starts.
 | Readiness | http://localhost:8080/ready |
 
 All host ports are bound to `127.0.0.1`; Redis is not published. Production overrides (secure cookies, no
-registration, no exposed database/API ports, required secrets) are in `docker-compose.prod.yml`:
+registration, no exposed database/API ports, required secrets) are in `docker-compose.prod.yml`. For a production
+server, generate the `.env` with `deploy/compute-engine/generate-env.sh <domain>` and follow
+[docs/DEPLOYMENT_COMPUTE_ENGINE.md](docs/DEPLOYMENT_COMPUTE_ENGINE.md); the overlay is then selected automatically:
 
 ```bash
-SECRET_KEY=... POSTGRES_PASSWORD=... APP_DB_PASSWORD=... PUBLIC_ORIGIN=https://credit.example.com \
-  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+deploy/compute-engine/deploy.sh
 ```
+
+HTTPS is required in production: the session cookie is `Secure`-only, so terminate TLS in front of the frontend
+(the guide sets up nginx with Let's Encrypt).
 
 ### Option B — Local development
 
@@ -515,9 +520,14 @@ outside production.
   `scripts/restore.sh backups/<timestamp>` is non-destructive by default (restores into a scratch database, verifies
   counts, policies, triggers and revision, then drops it).
 - **Logs, rate limiting, troubleshooting** — [docs/OPERATIONS.md](docs/OPERATIONS.md).
-- **Google Cloud** — [deploy/gcp/README.md](deploy/gcp/README.md): Cloud Run (public web, internal API, worker),
-  Cloud SQL on a private IP, Memorystore, a private bucket and Secret Manager. **Prepared and dry-run only — not
-  deployed, no public URL.** `deploy/gcp/deploy.sh` prints its plan unless `DRY_RUN=0` is set.
+- **Google Compute Engine (primary target)** — [docs/DEPLOYMENT_COMPUTE_ENGINE.md](docs/DEPLOYMENT_COMPUTE_ENGINE.md):
+  one Ubuntu 24.04 `e2-standard-4` VM in `asia-south1` running the Compose production stack behind nginx with
+  Let's Encrypt, IAP-only SSH, daily disk snapshots and nightly application backups. Scripts in
+  [`deploy/compute-engine/`](deploy/compute-engine/). **Rehearsed locally (production overlay behind nginx/TLS, all
+  verification scripts passing); not yet deployed to a Google Cloud project — no public URL.**
+- **Google Cloud managed alternative** — [deploy/gcp/README.md](deploy/gcp/README.md): Cloud Run (public web,
+  internal API, worker), Cloud SQL on a private IP, Memorystore, a private bucket and Secret Manager. **Prepared and
+  dry-run only — not deployed.** `deploy/gcp/deploy.sh` prints its plan unless `DRY_RUN=0` is set.
 
 ## ✅ Verification status
 
@@ -540,7 +550,8 @@ Results of the latest full run (2026-11-27), detailed in [docs/BUILD_STATUS.md](
   lending model**. It is excluded from decisions by design.
 - **AI provider keys required.** Claude, Voyage and the search providers need your own API keys; their successful
   live paths have not yet been exercised.
-- **Not deployed.** The Google Cloud package is prepared but has not been run against a real project.
+- **Not deployed.** The Compute Engine and Cloud Run packages are prepared (the Compute Engine one rehearsed
+  locally) but neither has been run against a real Google Cloud project, so there is no public URL.
 - **Human review remains necessary.** Recommendations are decision support, not official approvals; every decision
   is made and justified by an authorised reviewer.
 - **Risk indicators are not confirmed fraud.** Findings are potential discrepancies or unusual patterns that need
@@ -555,7 +566,7 @@ Results of the latest full run (2026-11-27), detailed in [docs/BUILD_STATUS.md](
 
 - [ ] Validate the challenger on real, governed loan-repayment data with independent model-risk review
 - [ ] Exercise and monitor live LLM, embedding and search provider integrations
-- [ ] Deploy to Google Cloud and run `deploy/gcp/verify.sh` against the live environment
+- [ ] Deploy to Google Compute Engine and run `deploy/compute-engine/verify.sh` against the live environment
 - [ ] Shared fallback for rate limiting during Redis outages (e.g. gateway or edge limits)
 - [ ] Database unique constraint on statement periods after the legacy duplicate clean-up
 - [ ] Additional document types (e.g. CMA data, stock statements, ITR schedules)
@@ -574,7 +585,8 @@ distributed rate limiting, and an end-to-end verified Docker Compose stack.
 **Responsible use:** use only with appropriate authorisation and data-protection controls; treat all outputs as
 inputs to a human credit decision.
 
-**Contact:** _add your GitHub profile link here._
+**Maintainer:** [Archi Shaw (@Archi-shaw)](https://github.com/Archi-shaw) — issues and suggestions via
+[GitHub Issues](https://github.com/Archi-shaw/Intelli-Credit/issues).
 
 **License:** no license file has been added yet, so all rights are reserved by default. Add a `LICENSE` file before
 publishing if you want others to use the code.

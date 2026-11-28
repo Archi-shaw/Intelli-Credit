@@ -1,0 +1,66 @@
+# Intelli-Credit — nginx reverse proxy (HTTPS) in front of the Next.js frontend on 127.0.0.1:3080.
+# Installed by deploy/compute-engine/setup-nginx.sh, which replaces __DOMAIN__. Written for nginx 1.24 (Ubuntu 24.04).
+#
+# Limits are tied to the application:
+#   client_max_body_size  26m  = MAX_UPLOAD_MB (25) + 1 MB multipart slack (backend/app/main.py UPLOAD_SLACK);
+#                                the API returns its own JSON error for anything between 25 and 26 MB.
+#   proxy_read_timeout    180s = the frontend's API proxy timeout (frontend/next.config.mjs, API_PROXY_TIMEOUT_MS);
+#                                assistant chat and research call external providers synchronously.
+
+upstream intellicredit_web {
+    server 127.0.0.1:3080;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    # Let's Encrypt HTTP-01 challenges (certbot --webroot -w /var/www/certbot).
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:ic_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+    # The frontend already sets X-Frame-Options, nosniff, Referrer-Policy and Permissions-Policy.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    client_max_body_size 26m;
+    client_body_timeout 120s;
+
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 180s;
+    proxy_read_timeout 180s;
+
+    location / {
+        proxy_pass http://intellicredit_web;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # Overwrite (never append to) any client-supplied X-Forwarded-For so the API's per-IP rate limits and audit
+        # log see the real client address. The API trusts the Docker network hops via TRUSTED_PROXIES.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}

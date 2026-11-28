@@ -1,6 +1,52 @@
 # Intelli-Credit — build status
 
-_Last updated: 2026-11-27 (production-readiness phase)._ The application runs end to end — FastAPI backend, Next.js
+## 0. Compute Engine deployment preparation (2026-11-29)
+
+Target: one Ubuntu 24.04 `e2-standard-4` VM in `asia-south1` that runs the Compose production overlay behind nginx
+and Let's Encrypt ([DEPLOYMENT_COMPUTE_ENGINE.md](DEPLOYMENT_COMPUTE_ENGINE.md)). **No Google Cloud resources have
+been created.** The `gcloud` CLI was not installed or authenticated, and no domain or cost approval was available.
+`create-vm.sh` has therefore only been run as a dry run.
+
+**Local production rehearsal.** The steps below ran in an isolated Compose project, so the development stack and its
+volumes were untouched:
+
+- `generate-env.sh` wrote a production `.env`.
+- The production overlay ran behind nginx 1.24 (the Ubuntu 24.04 version), using the repository's nginx template
+  with a self-signed certificate on ports 8443/8088.
+- The synthetic demo was seeded.
+
+| Check | Result |
+|---|---|
+| `deploy/compute-engine/verify.sh` (TLS, redirect, HSTS/nosniff, hidden server version, readiness, registration disabled, 10 internal ports closed from the LAN address, cookie flags, `verify_stack.py`, `security_probe.py`) | **All passed**: cookie `Secure` + `HttpOnly` + `SameSite=Lax`; workflow PASS; probe 42/42 |
+| XLSX, DOCX and PNG uploads through nginx (synthetic) | Completed and classified: XLSX and DOCX as financial statements (12 and 8 metrics), PNG as bank statement via OCR |
+| Upload limits | 15 MB → 201; 25.5 MB → API `file_too_large` in 0.4 s; 27 MB → nginx 413 |
+| Five Cs, assistant (extractive, no provider), reviewer decision, audit (`review.returned`) | Passed |
+| Client IP attribution (nginx → Next.js → API) | Real client IP recorded in the audit log; client-supplied `X-Forwarded-For` ignored |
+| Logout | The session token is rejected afterwards (401) |
+| Persistence | Document and CAM PDF hashes identical after `docker compose down` / `up`; all long-running services `unless-stopped` |
+| Backup / restore drill | `backup-cron.sh` → `restore.sh`: **RESTORE VERIFIED** (row counts, 31 RLS policies, 2 triggers, revision 0002) |
+| Production settings in the API container | `ENVIRONMENT=production`, Secure cookies, registration off, connects as `intellicredit_app` (not superuser, no `BYPASSRLS`), no production problems, `/api/docs` 404 |
+| Compose validation | Development and production configs valid; the production config fails without secrets; only the frontend is published (on 127.0.0.1) |
+| Backend / frontend tests | pytest 111 passed, 11 skipped; Vitest 19 passed; `tsc` clean; production build passed; Playwright 7 passed (production build with the new `next.config.mjs`, development API); migrations at head with no drift |
+
+**Defects found and fixed during preparation:**
+
+1. **Uploads over 10 MB failed through the web proxy.** Next.js 15.5 buffers rewrite request bodies and truncates
+   them at 10 MB, so files between 10 and 25 MB (the documented limit) hung for 120 s and then failed with a 400.
+   Fixed with `experimental.middlewareClientMaxBodySize` = 26 MB in `frontend/next.config.mjs`.
+2. **The proxy aborted API calls after 30 s.** This is Next's default `proxyTimeout`. Assistant chat and research call
+   providers synchronously, with an LLM timeout of 90 s plus retries, so the timeout is raised to 180 s and nginx
+   matches it.
+3. **Compose did not forward several documented settings.** `TAVILY_API_KEY`, `BRAVE_API_KEY`, `SERPAPI_API_KEY`,
+   `LLM_EFFORT`, `LLM_TIMEOUT_SECONDS`, `EMBEDDING_MODEL` and `MAX_UPLOAD_MB` set in `.env` never reached the
+   containers. They are now forwarded, with the application's defaults.
+4. **The production seed ran with development settings.** With `ENVIRONMENT=development` it would silently fall back
+   to the documented default demo password. It now uses the production environment and refuses to run without
+   `DEMO_PASSWORD`.
+
+---
+
+_Production-readiness phase: 2026-11-27._ The application runs end to end — FastAPI backend, Next.js
 frontend, PostgreSQL (pgvector + row-level security), Celery/Redis background processing, CAM generation — and is
 verified under Docker Compose. Everything below states what was actually executed; items that are **not** verified
 are listed in §6.

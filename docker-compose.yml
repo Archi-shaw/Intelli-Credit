@@ -22,10 +22,18 @@ x-backend-env: &backend-env
   LLM_PROVIDER: ${LLM_PROVIDER:-none}
   LLM_API_KEY: ${LLM_API_KEY:-}
   LLM_MODEL: ${LLM_MODEL:-claude-opus-5-5}
+  LLM_EFFORT: ${LLM_EFFORT:-medium}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-90}
   EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local-hash}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-hash-384}
   EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
   SEARCH_PROVIDER: ${SEARCH_PROVIDER:-none}
   SEARCH_API_KEY: ${SEARCH_API_KEY:-}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+  SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+  # Keep any reverse proxy's request-body limit slightly above this (nginx: client_max_body_size).
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
   DEMO_PASSWORD: ${DEMO_PASSWORD:-}
 
 services:

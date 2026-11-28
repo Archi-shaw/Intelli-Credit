@@ -38,4 +38,7 @@ services:
   frontend:
     ports: ["${IC_WEB_BIND:-127.0.0.1}:${IC_WEB_PORT:-3080}:3000"]
   seed:
+    # Not started by `up`. For an optional synthetic demo: `docker compose run --rm seed`. It runs with the
+    # production settings, so it refuses to create demo users unless DEMO_PASSWORD is set explicitly.
+    environment: *prod-env
     profiles: [never]

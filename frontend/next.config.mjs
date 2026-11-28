@@ -1,7 +1,16 @@
 /** @type {import('next').NextConfig} */
 const backend = process.env.BACKEND_URL || "http://127.0.0.1:8001";
+// The /api proxy otherwise aborts after Next's default of 30 s. Assistant chat and research call external
+// providers synchronously (LLM_TIMEOUT_SECONDS defaults to 90 s, with SDK retries), so allow up to 180 s.
+// Keep reverse-proxy read timeouts (e.g. nginx proxy_read_timeout) at least this long.
+const proxyTimeoutMs = Number(process.env.API_PROXY_TIMEOUT_MS || 180000);
+// Next buffers request bodies for rewrites and silently truncates them at 10 MB by default, which made uploads
+// between 10 MB and the API's MAX_UPLOAD_MB (25) hang until timeout. Allow the API limit plus multipart overhead;
+// the API itself still enforces MAX_UPLOAD_MB.
+const proxyMaxBodyMb = Number(process.env.API_PROXY_MAX_BODY_MB || 26);
 
 const nextConfig = {
+  experimental: { proxyTimeout: proxyTimeoutMs, middlewareClientMaxBodySize: `${proxyMaxBodyMb}mb` },
   // A separate dist dir lets the E2E production build run alongside `next dev`.
   distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
